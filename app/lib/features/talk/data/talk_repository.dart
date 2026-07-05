@@ -17,8 +17,8 @@ class TalkRepository {
     final availability = await _database
         .ref('memberAvailability/${session.groupId}/${session.userId}')
         .get();
-    final effectiveState = availability.child('effectiveState').val();
-    final canReceive = availability.child('canReceiveLiveAudio').val() == true;
+    final effectiveState = availability.child('effectiveState').value;
+    final canReceive = availability.child('canReceiveLiveAudio').value == true;
 
     if ((effectiveState != 'live' && effectiveState != 'listening') ||
         !canReceive) {
