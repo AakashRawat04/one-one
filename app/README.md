@@ -2,7 +2,22 @@
 
 Android-first Flutter client for the One One LiveKit walkie-talkie app.
 
-Phase 1 currently contains a LiveKit background-audio spike under `lib/phase1_spike/`.
+Phase 3 currently starts the app through Firebase anonymous auth and device registration.
+
+Before running after Phase 3, add:
+
+```txt
+android/app/google-services.json
+```
+
+Then run:
+
+```sh
+flutter pub get
+flutter run
+```
+
+Phase 1 still contains a LiveKit background-audio spike under `lib/phase1_spike/`.
 
 The spike:
 
@@ -12,7 +27,7 @@ The spike:
 - Auto-subscribes to remote audio and keeps the local mic muted.
 - Sends heartbeat/status events back to the UI.
 
-Runtime verification must be done manually on Android devices with a valid LiveKit URL/token.
+Runtime verification must be done manually on Android devices with a valid Firebase config and LiveKit URL/token.
 
 ## Run
 

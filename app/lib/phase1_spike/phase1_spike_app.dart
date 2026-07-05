@@ -167,9 +167,7 @@ class _Phase1SpikeScreenState extends State<Phase1SpikeScreen> {
           ? await FlutterForegroundTask.restartService()
           : await FlutterForegroundTask.startService(
               serviceId: 101,
-              serviceTypes: const [
-                ForegroundServiceTypes.mediaPlayback,
-              ],
+              serviceTypes: const [ForegroundServiceTypes.mediaPlayback],
               notificationTitle: 'One One is online',
               notificationText: 'Connecting to LiveKit',
               notificationButtons: const [

@@ -49,8 +49,15 @@ class WalkieForegroundTaskHandler extends TaskHandler {
 
   @override
   void onReceiveData(Object data) {
-    if (data is Map && data[taskCommandKey] == taskCommandDisconnect) {
+    if (data is! Map) return;
+
+    final command = data[taskCommandKey];
+    if (command == taskCommandDisconnect) {
       unawaited(_disconnectAndStop());
+    } else if (command == taskCommandEnableMic) {
+      unawaited(_setMicrophoneEnabled(true));
+    } else if (command == taskCommandDisableMic) {
+      unawaited(_setMicrophoneEnabled(false));
     }
   }
 
@@ -177,6 +184,31 @@ class WalkieForegroundTaskHandler extends TaskHandler {
     _sendStatus('stopping', 'Disconnect command received.');
     await _disconnectRoom();
     await FlutterForegroundTask.stopService();
+  }
+
+  Future<void> _setMicrophoneEnabled(bool enabled) async {
+    final room = _room;
+    final localParticipant = room?.localParticipant;
+
+    if (room == null || localParticipant == null) {
+      _sendStatus('mic_failed', 'Cannot change mic before LiveKit connects.');
+      return;
+    }
+
+    try {
+      await localParticipant.setMicrophoneEnabled(enabled);
+      _sendStatus(
+        enabled ? 'talking' : 'live',
+        enabled ? 'Microphone enabled.' : 'Microphone muted.',
+      );
+
+      FlutterForegroundTask.updateService(
+        notificationTitle: 'One One is online',
+        notificationText: enabled ? 'Talking' : 'Live and listening',
+      );
+    } catch (error) {
+      _sendStatus('mic_failed', 'Microphone change failed: $error');
+    }
   }
 
   Future<void> _disconnectRoom() async {

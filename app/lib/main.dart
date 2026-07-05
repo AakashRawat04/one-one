@@ -1,9 +1,10 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
-import 'phase1_spike/phase1_spike_app.dart';
+import 'app/one_one_app.dart';
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
   FlutterForegroundTask.initCommunicationPort();
-  runApp(const OneOnePhase1App());
+  runApp(const OneOneApp());
 }

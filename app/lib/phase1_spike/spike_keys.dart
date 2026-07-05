@@ -10,3 +10,6 @@ const String taskHeartbeatCountKey = 'heartbeatCount';
 
 const String taskCommandKey = 'command';
 const String taskCommandDisconnect = 'disconnect';
+const String taskCommandEnableMic = 'enable_mic';
+const String taskCommandDisableMic = 'disable_mic';
+const String taskTalkSessionIdKey = 'talkSessionId';

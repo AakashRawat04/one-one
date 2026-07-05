@@ -1,0 +1,94 @@
+{
+  "rules": {
+    "users": {
+      "$userId": {
+        ".read": "auth != null",
+        ".write": "auth != null && auth.uid == $userId"
+      }
+    },
+    "userDevices": {
+      "$userId": {
+        ".read": "auth != null && auth.uid == $userId",
+        ".write": "auth != null && auth.uid == $userId"
+      }
+    },
+    "userSettings": {
+      "$userId": {
+        ".read": "auth != null && auth.uid == $userId",
+        ".write": "auth != null && auth.uid == $userId"
+      }
+    },
+    "groups": {
+      "$groupId": {
+        ".read": "auth != null",
+        ".write": false
+      }
+    },
+    "groupMembers": {
+      ".read": "auth != null",
+      "$groupId": {
+        ".write": false
+      }
+    },
+    "groupInvites": {
+      ".read": false,
+      ".write": false
+    },
+    "livekitRooms": {
+      "$groupId": {
+        ".read": "auth != null",
+        ".write": false
+      }
+    },
+    "memberAvailability": {
+      "$groupId": {
+        ".read": "auth != null",
+        "$userId": {
+          ".write": "auth != null && auth.uid == $userId"
+        }
+      }
+    },
+    "appServiceSessions": {
+      "$sessionId": {
+        ".read": "auth != null && data.child('userId').val() == auth.uid",
+        ".write": "auth != null"
+      }
+    },
+    "livekitSessions": {
+      "$sessionId": {
+        ".read": "auth != null && data.child('userId').val() == auth.uid",
+        ".write": "auth != null"
+      }
+    },
+    "notificationEvents": {
+      "$groupId": {
+        ".read": "auth != null",
+        ".write": false
+      }
+    },
+    "notificationDeliveries": {
+      "$notificationEventId": {
+        ".read": "auth != null",
+        ".write": false
+      }
+    },
+    "talkLocks": {
+      "$groupId": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      }
+    },
+    "talkSessions": {
+      "$groupId": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      }
+    },
+    "statusEvents": {
+      "$groupId": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      }
+    }
+  }
+}

@@ -18,13 +18,19 @@ requirements/ Planning docs and implementation handoffs
 
 ## Flutter App
 
+After Phase 3, add Firebase Android config first:
+
+```txt
+app/android/app/google-services.json
+```
+
 ```sh
 cd app
 flutter pub get
 flutter run
 ```
 
-Current state: Phase 0 scaffold only. Product features start after the background-audio spike.
+Current state: Phase 1 audio spike, Phase 3 Firebase anonymous identity/device registration, Phase 4 groups/invites, Phase 5 online/away token/availability flow, Phase 6 notifications, and Phase 7 push-to-talk.
 
 ## Backend
 
@@ -41,6 +47,18 @@ Health check:
 curl http://localhost:8080/healthz
 ```
 
+Readiness:
+
+```sh
+curl http://localhost:8080/readyz
+```
+
 ## Implementation Order
 
-Follow the phases in `requirements/flutter-livekit-agent-phase-prompts.md`. Phase 1 must validate Android foreground service + LiveKit receive behavior before full product features are built.
+Follow the phases in `requirements/flutter-livekit-agent-phase-prompts.md`. Phase 7 is not the final product phase; final UI/settings, reliability, and release packaging remain.
+
+Before APK testing, read:
+
+```txt
+requirements/phase-0-to-7-testing-reality-check.md
+```

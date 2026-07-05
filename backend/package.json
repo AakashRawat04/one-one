@@ -16,7 +16,9 @@
   "dependencies": {
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
+    "firebase-admin": "^14.0.0",
     "helmet": "^8.1.0",
+    "livekit-server-sdk": "^2.16.0",
     "pino": "^10.1.0",
     "pino-http": "^11.0.0",
     "zod": "^4.1.13"
