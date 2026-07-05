@@ -4,7 +4,6 @@ class UserDeviceRecord {
     required this.platform,
     required this.appVersion,
     required this.installId,
-    required this.fcmToken,
     required this.micPermissionGranted,
     required this.notificationPermissionGranted,
     required this.batteryOptimizationIgnored,
@@ -18,7 +17,6 @@ class UserDeviceRecord {
   final String platform;
   final String appVersion;
   final String installId;
-  final String? fcmToken;
   final bool micPermissionGranted;
   final bool notificationPermissionGranted;
   final bool batteryOptimizationIgnored;
@@ -32,7 +30,6 @@ class UserDeviceRecord {
       'platform': platform,
       'appVersion': appVersion,
       'installId': installId,
-      'fcmToken': fcmToken,
       'micPermissionGranted': micPermissionGranted,
       'notificationPermissionGranted': notificationPermissionGranted,
       'batteryOptimizationIgnored': batteryOptimizationIgnored,

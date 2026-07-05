@@ -147,10 +147,6 @@ class _IdentityDetails extends StatelessWidget {
         _DetailRow(label: 'Device ID', value: session.deviceId),
         _DetailRow(label: 'App version', value: session.device.appVersion),
         _DetailRow(
-          label: 'FCM',
-          value: session.device.fcmToken == null ? 'not available' : 'saved',
-        ),
-        _DetailRow(
           label: 'Mic permission',
           value: session.device.micPermissionGranted ? 'granted' : 'missing',
         ),

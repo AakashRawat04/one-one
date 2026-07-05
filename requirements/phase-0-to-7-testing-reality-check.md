@@ -6,11 +6,11 @@ Generated through Phase 7:
 
 - Phase 0: scaffold.
 - Phase 1: foreground-service LiveKit receive spike.
-- Phase 2: backend Firebase Admin, LiveKit, FCM utilities.
+- Phase 2: backend Firebase Admin and LiveKit utilities.
 - Phase 3: Firebase anonymous auth, user/device/settings.
 - Phase 4: groups, invites, membership.
 - Phase 5: online/away, LiveKit token, availability.
-- Phase 6: friend-live and nudge notification APIs/UI hooks.
+- Phase 6: push notification work is currently disabled in the Flutter app.
 - Phase 7: push-to-talk, talk lock, mic publish command.
 
 Still not done:
@@ -58,17 +58,19 @@ flutter run --dart-define=ONE_ONE_API_BASE_URL=https://your-backend-url
 
 Use HTTPS for real phones if possible.
 
-## FCM Reality Check
+## Push Notification Reality Check
 
-For Android, after Firebase app setup and `google-services.json`, FCM token capture should work through `firebase_messaging`.
+FCM has been removed from the current Flutter client to simplify real-device testing.
 
-You still need:
+Current consequences:
 
-- Android notification permission granted on Android 13+.
-- Backend Firebase Admin credentials.
-- Stored `fcmToken` under `/userDevices/{userId}/{deviceId}`.
+- No Firebase Messaging dependency in the Flutter app.
+- No FCM token is captured under `/userDevices/{userId}/{deviceId}`.
+- Friend-live push notifications are not sent by the app.
+- Nudge buttons are hidden from the app.
+- Android notification permission may still be requested by the foreground service because Android requires a visible foreground-service notification.
 
-No client-side Firebase secret is needed. The Flutter app must not send FCM directly.
+LiveKit audio is not dependent on FCM. Users who have gone online should still be able to receive LiveKit audio through the foreground service.
 
 ## End-To-End Checklist
 
@@ -115,24 +117,6 @@ No client-side Firebase secret is needed. The Flutter app must not send FCM dire
 }
 ```
 
-### Friend-Live Notification
-
-- When Device A becomes live, backend should create:
-
-```txt
-/notificationEvents/{groupId}/{notificationEventId}
-/notificationDeliveries/{notificationEventId}/{deliveryId}
-```
-
-- Device B should receive notification if FCM token and notification permission are valid.
-
-### Nudge
-
-- Device A opens group screen.
-- Tap member nudge or `Nudge all`.
-- Confirm backend creates nudge notification event and delivery records.
-- Device B should receive nudge notification.
-
 ### Push-To-Talk
 
 - Both devices are online in the same group.
@@ -164,5 +148,5 @@ Before Phase 7, the mic was intentionally muted. After Phase 7:
 
 - Firebase rules are permissive for testing and must be hardened before release.
 - Heartbeat is still partly UI-controller based; Phase 9 should move more reliability work into the service/native layer if Android background testing exposes stale heartbeat issues.
-- Notification tap deep-link handling is not polished.
+- Push notifications/nudges are disabled in the Flutter app. Reintroduce FCM later if out-of-app alerts are required.
 - Release signing/App Distribution is still Phase 10.

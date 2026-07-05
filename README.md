@@ -12,7 +12,7 @@ The implementation follows:
 
 ```txt
 app/          Flutter Android client
-backend/      Node/TypeScript token and notification API
+backend/      Node/TypeScript token API
 requirements/ Planning docs and implementation handoffs
 ```
 
@@ -30,7 +30,9 @@ flutter pub get
 flutter run
 ```
 
-Current state: Phase 1 audio spike, Phase 3 Firebase anonymous identity/device registration, Phase 4 groups/invites, Phase 5 online/away token/availability flow, Phase 6 notifications, and Phase 7 push-to-talk.
+Current state: Phase 1 audio spike, Phase 3 Firebase anonymous identity/device registration, Phase 4 groups/invites, Phase 5 online/away token/availability flow, and Phase 7 push-to-talk.
+
+FCM push notifications are disabled in the current Flutter build. Nudge and friend-live push alerts are not part of the active APK path.
 
 ## Backend
 

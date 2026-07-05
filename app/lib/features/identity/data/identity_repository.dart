@@ -4,7 +4,6 @@ import 'dart:io';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_database/firebase_database.dart';
-import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -19,43 +18,52 @@ class IdentityRepository {
   IdentityRepository({
     FirebaseAuth? auth,
     FirebaseDatabase? database,
-    FirebaseMessaging? messaging,
     DeviceIdentityStore? deviceIdentityStore,
   }) : _auth = auth ?? FirebaseAuth.instance,
        _database = database ?? FirebaseDatabase.instance,
-       _messaging = messaging ?? FirebaseMessaging.instance,
        _deviceIdentityStore = deviceIdentityStore ?? DeviceIdentityStore();
+
+  static const Duration _requiredStartupTimeout = Duration(seconds: 20);
+  static const Duration _optionalStartupTimeout = Duration(seconds: 4);
 
   final FirebaseAuth _auth;
   final FirebaseDatabase _database;
-  final FirebaseMessaging _messaging;
   final DeviceIdentityStore _deviceIdentityStore;
 
-  StreamSubscription<String>? _fcmTokenSubscription;
-  String? _latestUserId;
-  String? _latestDeviceId;
-
   Future<IdentitySession> ensureIdentity() async {
-    final firebaseUser = await _ensureAnonymousUser();
+    final firebaseUser = await _requiredStartupStep(
+      _ensureAnonymousUser(),
+      'Firebase anonymous sign-in',
+    );
     final now = _nowSeconds();
-    final localDevice = await _deviceIdentityStore.getOrCreate();
-    final appVersion = await _readAppVersion();
-    final fcmToken = await _readFcmToken();
+    final localDevice = await _requiredStartupStep(
+      _deviceIdentityStore.getOrCreate(),
+      'local device identity setup',
+    );
+    final appVersion = await _optionalStartupStep(
+      _readAppVersion(),
+      fallback: 'unknown',
+    );
     final permissions = await _readPermissionDiagnostics();
 
-    final user = await _upsertUserProfile(firebaseUser.uid, now);
-    final settings = await _ensureUserSettings(firebaseUser.uid, now);
-    final device = await _upsertUserDevice(
-      userId: firebaseUser.uid,
-      localDevice: localDevice,
-      appVersion: appVersion,
-      fcmToken: fcmToken,
-      permissions: permissions,
-      now: now,
+    final user = await _requiredStartupStep(
+      _upsertUserProfile(firebaseUser.uid, now),
+      'Firebase Database user profile sync',
     );
-
-    _latestUserId = firebaseUser.uid;
-    _latestDeviceId = localDevice.deviceId;
+    final settings = await _requiredStartupStep(
+      _ensureUserSettings(firebaseUser.uid, now),
+      'Firebase Database user settings sync',
+    );
+    final device = await _requiredStartupStep(
+      _upsertUserDevice(
+        userId: firebaseUser.uid,
+        localDevice: localDevice,
+        appVersion: appVersion,
+        permissions: permissions,
+        now: now,
+      ),
+      'Firebase Database device sync',
+    );
 
     return IdentitySession(user: user, device: device, settings: settings);
   }
@@ -81,25 +89,7 @@ class IdentityRepository {
     return ensureIdentity();
   }
 
-  void startFcmTokenRefreshListener() {
-    _fcmTokenSubscription ??= _messaging.onTokenRefresh.listen((token) {
-      final userId = _latestUserId;
-      final deviceId = _latestDeviceId;
-
-      if (userId == null || deviceId == null) return;
-
-      _database.ref('userDevices/$userId/$deviceId').update({
-        'fcmToken': token,
-        'updatedAt': _nowSeconds(),
-        'lastSeenAt': _nowSeconds(),
-      });
-    });
-  }
-
-  void dispose() {
-    _fcmTokenSubscription?.cancel();
-    _fcmTokenSubscription = null;
-  }
+  void dispose() {}
 
   Future<User> _ensureAnonymousUser() async {
     final currentUser = _auth.currentUser;
@@ -163,7 +153,6 @@ class IdentityRepository {
     required String userId,
     required LocalDeviceIdentity localDevice,
     required String appVersion,
-    required String? fcmToken,
     required _PermissionDiagnostics permissions,
     required int now,
   }) async {
@@ -181,7 +170,6 @@ class IdentityRepository {
       platform: Platform.isAndroid ? 'android' : Platform.operatingSystem,
       appVersion: appVersion,
       installId: localDevice.installId,
-      fcmToken: fcmToken,
       micPermissionGranted: permissions.micPermissionGranted,
       notificationPermissionGranted: permissions.notificationPermissionGranted,
       batteryOptimizationIgnored: permissions.batteryOptimizationIgnored,
@@ -200,22 +188,14 @@ class IdentityRepository {
     return '${packageInfo.version}+${packageInfo.buildNumber}';
   }
 
-  Future<String?> _readFcmToken() async {
-    try {
-      await _messaging.requestPermission();
-      return _messaging.getToken();
-    } catch (_) {
-      return null;
-    }
-  }
-
   Future<_PermissionDiagnostics> _readPermissionDiagnostics() async {
     bool batteryOptimizationIgnored = false;
     bool notificationPermissionGranted = false;
 
     try {
-      final notificationPermission =
-          await FlutterForegroundTask.checkNotificationPermission();
+      final notificationPermission = await _optionalStartupValue(
+        FlutterForegroundTask.checkNotificationPermission(),
+      );
       notificationPermissionGranted =
           notificationPermission == NotificationPermission.granted;
     } catch (_) {
@@ -223,17 +203,20 @@ class IdentityRepository {
     }
 
     try {
-      batteryOptimizationIgnored =
-          await FlutterForegroundTask.isIgnoringBatteryOptimizations;
+      batteryOptimizationIgnored = await FlutterForegroundTask
+          .isIgnoringBatteryOptimizations
+          .timeout(_optionalStartupTimeout);
     } catch (_) {
       batteryOptimizationIgnored = false;
     }
 
-    final micStatus = await Permission.microphone.status;
+    final micStatus =
+        await _optionalStartupValue(Permission.microphone.status) ??
+        PermissionStatus.denied;
 
     if (Platform.isAndroid) {
       try {
-        await DeviceInfoPlugin().androidInfo;
+        await _optionalStartupValue(DeviceInfoPlugin().androidInfo);
       } catch (_) {
         // Device metadata is not stored in the Phase 3 ERD. This call is kept
         // as a plugin smoke path for later diagnostics.
@@ -255,6 +238,47 @@ class IdentityRepository {
   int _nowSeconds() {
     return DateTime.now().millisecondsSinceEpoch ~/ 1000;
   }
+
+  Future<T> _requiredStartupStep<T>(Future<T> future, String stepName) async {
+    try {
+      return await future.timeout(_requiredStartupTimeout);
+    } on TimeoutException {
+      throw IdentityStartupException(
+        '$stepName timed out after ${_requiredStartupTimeout.inSeconds}s. '
+        'Check Firebase setup, phone internet, and Google Play services.',
+      );
+    } catch (error) {
+      throw IdentityStartupException('$stepName failed: $error');
+    }
+  }
+
+  Future<T> _optionalStartupStep<T>(
+    Future<T> future, {
+    required T fallback,
+  }) async {
+    try {
+      return await future.timeout(_optionalStartupTimeout);
+    } catch (_) {
+      return fallback;
+    }
+  }
+
+  Future<T?> _optionalStartupValue<T>(Future<T> future) async {
+    try {
+      return await future.timeout(_optionalStartupTimeout);
+    } catch (_) {
+      return null;
+    }
+  }
+}
+
+class IdentityStartupException implements Exception {
+  const IdentityStartupException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
 }
 
 class _PermissionDiagnostics {

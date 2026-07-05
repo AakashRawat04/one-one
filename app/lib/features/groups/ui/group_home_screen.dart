@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
 import '../../identity/models/identity_session.dart';
-import '../../notifications/data/notification_repository.dart';
 import '../../online/ui/online_screen.dart';
 import '../data/group_repository.dart';
 import '../models/group_invite_result.dart';
@@ -13,12 +12,10 @@ class GroupHomeScreen extends StatefulWidget {
     super.key,
     required this.session,
     this.groupRepository,
-    this.notificationRepository,
   });
 
   final IdentitySession session;
   final GroupRepository? groupRepository;
-  final NotificationRepository? notificationRepository;
 
   @override
   State<GroupHomeScreen> createState() => _GroupHomeScreenState();
@@ -27,8 +24,6 @@ class GroupHomeScreen extends StatefulWidget {
 class _GroupHomeScreenState extends State<GroupHomeScreen> {
   late final GroupRepository _groupRepository =
       widget.groupRepository ?? GroupRepository();
-  late final NotificationRepository _notificationRepository =
-      widget.notificationRepository ?? NotificationRepository();
   late Future<List<GroupSummary>> _groupsFuture = _loadGroups();
 
   final TextEditingController _groupNameController = TextEditingController(
@@ -133,39 +128,6 @@ class _GroupHomeScreenState extends State<GroupHomeScreen> {
         builder: (_) => OnlineScreen(identity: widget.session, group: group),
       ),
     );
-  }
-
-  Future<void> _nudgeAll() async {
-    final group = _selectedGroup;
-    if (group == null) {
-      setState(() => _message = 'Select a group first.');
-      return;
-    }
-
-    await _runBusy(() async {
-      final result = await _notificationRepository.nudgeAll(
-        groupId: group.groupId,
-      );
-      setState(() {
-        _message = 'Nudge sent to ${result.targetDevices} device(s).';
-      });
-    });
-  }
-
-  Future<void> _nudgeMember(GroupMemberSummary member) async {
-    final group = _selectedGroup;
-    if (group == null) return;
-
-    await _runBusy(() async {
-      final result = await _notificationRepository.nudgeOne(
-        groupId: group.groupId,
-        targetUserId: member.userId,
-      );
-      setState(() {
-        _message =
-            'Nudge sent to ${member.displayName}: ${result.targetDevices} device(s).';
-      });
-    });
   }
 
   Future<void> _runBusy(Future<void> Function() action) async {
@@ -288,12 +250,6 @@ class _GroupHomeScreenState extends State<GroupHomeScreen> {
                   icon: const Icon(Icons.wifi_tethering),
                   label: const Text('Online mode'),
                 ),
-                const SizedBox(height: 12),
-                OutlinedButton.icon(
-                  onPressed: _busy || _selectedGroup == null ? null : _nudgeAll,
-                  icon: const Icon(Icons.notifications_active_outlined),
-                  label: const Text('Nudge all'),
-                ),
                 if (_latestInvite != null) ...[
                   const SizedBox(height: 12),
                   SelectableText(
@@ -316,17 +272,6 @@ class _GroupHomeScreenState extends State<GroupHomeScreen> {
                       contentPadding: EdgeInsets.zero,
                       title: Text(member.displayName),
                       subtitle: Text('${member.role} | ${member.memberState}'),
-                      trailing: member.userId == widget.session.userId
-                          ? null
-                          : IconButton(
-                              tooltip: 'Nudge',
-                              icon: const Icon(
-                                Icons.notifications_active_outlined,
-                              ),
-                              onPressed: _busy
-                                  ? null
-                                  : () => _nudgeMember(member),
-                            ),
                     ),
               ],
             );

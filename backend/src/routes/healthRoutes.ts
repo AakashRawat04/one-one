@@ -4,6 +4,15 @@ import { getReadiness } from "../services/readiness.js";
 export function createHealthRoutes() {
   const router = Router();
 
+  router.get("/", (_request, response) => {
+    response.status(200).json({
+      ok: true,
+      service: "one-one-token-api",
+      health: "/healthz",
+      readiness: "/readyz"
+    });
+  });
+
   router.get("/healthz", (_request, response) => {
     response.status(200).json({
       ok: true,

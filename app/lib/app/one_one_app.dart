@@ -71,12 +71,6 @@ class _IdentityGateState extends State<_IdentityGate> {
       .ensureIdentity();
 
   @override
-  void initState() {
-    super.initState();
-    _identityRepository.startFcmTokenRefreshListener();
-  }
-
-  @override
   void dispose() {
     _identityRepository.dispose();
     super.dispose();

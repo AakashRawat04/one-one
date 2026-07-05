@@ -6,7 +6,6 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import '../../../phase1_spike/spike_keys.dart';
 import '../../groups/models/group_summary.dart';
 import '../../identity/models/identity_session.dart';
-import '../../notifications/data/notification_repository.dart';
 import '../../talk/data/talk_repository.dart';
 import '../../talk/models/talk_session.dart';
 import '../data/online_repository.dart';
@@ -18,14 +17,12 @@ class OnlineScreen extends StatefulWidget {
     required this.identity,
     required this.group,
     this.onlineRepository,
-    this.notificationRepository,
     this.talkRepository,
   });
 
   final IdentitySession identity;
   final GroupSummary group;
   final OnlineRepository? onlineRepository;
-  final NotificationRepository? notificationRepository;
   final TalkRepository? talkRepository;
 
   @override
@@ -35,8 +32,6 @@ class OnlineScreen extends StatefulWidget {
 class _OnlineScreenState extends State<OnlineScreen> {
   late final OnlineRepository _onlineRepository =
       widget.onlineRepository ?? OnlineRepository();
-  late final NotificationRepository _notificationRepository =
-      widget.notificationRepository ?? NotificationRepository();
   late final TalkRepository _talkRepository =
       widget.talkRepository ?? TalkRepository();
   OnlineSession? _session;
@@ -46,7 +41,7 @@ class _OnlineScreenState extends State<OnlineScreen> {
   String? _message;
   bool _busy = false;
   bool _talkBusy = false;
-  bool _friendLiveSent = false;
+  bool _liveMarked = false;
 
   @override
   void initState() {
@@ -125,7 +120,7 @@ class _OnlineScreenState extends State<OnlineScreen> {
         _session = null;
         _talkSession = null;
         _state = 'away';
-        _friendLiveSent = false;
+        _liveMarked = false;
         _message = 'Away';
       });
     } catch (error) {
@@ -200,25 +195,23 @@ class _OnlineScreenState extends State<OnlineScreen> {
     });
 
     final session = _session;
-    if (session != null && status == 'connected' && !_friendLiveSent) {
-      _friendLiveSent = true;
-      _markLiveAndNotify(session);
+    if (session != null && status == 'connected' && !_liveMarked) {
+      _liveMarked = true;
+      _markLive(session);
     }
   }
 
-  Future<void> _markLiveAndNotify(OnlineSession session) async {
+  Future<void> _markLive(OnlineSession session) async {
     try {
       await _onlineRepository.markLive(session);
-      final result = await _notificationRepository.sendFriendLive(session);
       if (!mounted) return;
       setState(() {
-        _message =
-            'Live notification sent to ${result.targetDevices} device(s).';
+        _message = 'Live';
       });
     } catch (error) {
       if (!mounted) return;
       setState(() {
-        _message = 'Live, but notification failed: $error';
+        _message = 'Connected, but state sync failed: $error';
       });
     }
   }
