@@ -22,3 +22,5 @@ build/
 # IDE
 .idea/
 .vscode/
+
+google-services.json

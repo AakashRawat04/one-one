@@ -2,7 +2,17 @@
 
 Android-first Flutter client for the One One LiveKit walkie-talkie app.
 
-Phase 0 is only the generated Flutter scaffold. The next implementation step is the background-audio spike described in `../requirements/flutter-livekit-agent-phase-prompts.md`.
+Phase 1 currently contains a LiveKit background-audio spike under `lib/phase1_spike/`.
+
+The spike:
+
+- Starts an Android foreground service from the visible UI.
+- Keeps a persistent `walkie_service` notification while online.
+- Connects to LiveKit from the foreground-service task isolate using a temporary URL/token entered in the app.
+- Auto-subscribes to remote audio and keeps the local mic muted.
+- Sends heartbeat/status events back to the UI.
+
+Runtime verification must be done manually on Android devices with a valid LiveKit URL/token.
 
 ## Run
 
