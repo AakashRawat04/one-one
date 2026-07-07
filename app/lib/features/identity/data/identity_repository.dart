@@ -8,6 +8,7 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import '../../../core/firebase/app_database.dart';
 import '../models/app_user_profile.dart';
 import '../models/identity_session.dart';
 import '../models/user_device_record.dart';
@@ -20,7 +21,7 @@ class IdentityRepository {
     FirebaseDatabase? database,
     DeviceIdentityStore? deviceIdentityStore,
   }) : _auth = auth ?? FirebaseAuth.instance,
-       _database = database ?? FirebaseDatabase.instance,
+       _database = database ?? AppDatabase.instance(),
        _deviceIdentityStore = deviceIdentityStore ?? DeviceIdentityStore();
 
   static const Duration _requiredStartupTimeout = Duration(seconds: 20);

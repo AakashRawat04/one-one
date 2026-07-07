@@ -2,13 +2,14 @@ import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:uuid/uuid.dart';
 
+import '../../../core/firebase/app_database.dart';
 import '../../../phase1_spike/spike_keys.dart';
 import '../../online/models/online_session.dart';
 import '../models/talk_session.dart';
 
 class TalkRepository {
   TalkRepository({FirebaseDatabase? database})
-    : _database = database ?? FirebaseDatabase.instance;
+    : _database = database ?? AppDatabase.instance();
 
   final FirebaseDatabase _database;
 

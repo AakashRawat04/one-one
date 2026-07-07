@@ -53,10 +53,22 @@ FIREBASE_DATABASE_URL=https://your-project-id-default-rtdb.firebaseio.com
 App:
 
 ```sh
-flutter run --dart-define=ONE_ONE_API_BASE_URL=https://your-backend-url
+flutter run \
+  --dart-define=ONE_ONE_API_BASE_URL=https://your-backend-url \
+  --dart-define=ONE_ONE_FIREBASE_DATABASE_URL=https://your-project-id-default-rtdb.region.firebasedatabase.app
 ```
 
 Use HTTPS for real phones if possible.
+
+The Flutter app and backend must use the exact same Realtime Database URL.
+For the current Firebase project, use:
+
+```txt
+https://oneone-3adb5-default-rtdb.asia-southeast1.firebasedatabase.app
+```
+
+If the app writes `/users/{uid}` to one database but the backend reads another
+database, backend group creation fails with `user_not_found`.
 
 ## Push Notification Reality Check
 

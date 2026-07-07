@@ -1,5 +1,6 @@
 import 'package:firebase_database/firebase_database.dart';
 
+import '../../../core/firebase/app_database.dart';
 import '../../../core/network/api_client.dart';
 import '../models/group_invite_result.dart';
 import '../models/group_member_summary.dart';
@@ -8,7 +9,7 @@ import '../models/group_summary.dart';
 class GroupRepository {
   GroupRepository({ApiClient? apiClient, FirebaseDatabase? database})
     : _apiClient = apiClient ?? ApiClient(),
-      _database = database ?? FirebaseDatabase.instance;
+      _database = database ?? AppDatabase.instance();
 
   final ApiClient _apiClient;
   final FirebaseDatabase _database;

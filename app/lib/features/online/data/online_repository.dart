@@ -5,6 +5,7 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:uuid/uuid.dart';
 
+import '../../../core/firebase/app_database.dart';
 import '../../../core/network/api_client.dart';
 import '../../../phase1_spike/spike_keys.dart';
 import '../../../phase1_spike/walkie_foreground_task.dart';
@@ -16,7 +17,7 @@ import '../models/online_session.dart';
 class OnlineRepository {
   OnlineRepository({ApiClient? apiClient, FirebaseDatabase? database})
     : _apiClient = apiClient ?? ApiClient(),
-      _database = database ?? FirebaseDatabase.instance;
+      _database = database ?? AppDatabase.instance();
 
   final ApiClient _apiClient;
   final FirebaseDatabase _database;

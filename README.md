@@ -27,7 +27,9 @@ app/android/app/google-services.json
 ```sh
 cd app
 flutter pub get
-flutter run
+flutter run \
+  --dart-define=ONE_ONE_API_BASE_URL=https://your-backend-url \
+  --dart-define=ONE_ONE_FIREBASE_DATABASE_URL=https://oneone-3adb5-default-rtdb.asia-southeast1.firebasedatabase.app
 ```
 
 Current state: Phase 1 audio spike, Phase 3 Firebase anonymous identity/device registration, Phase 4 groups/invites, Phase 5 online/away token/availability flow, and Phase 7 push-to-talk.
