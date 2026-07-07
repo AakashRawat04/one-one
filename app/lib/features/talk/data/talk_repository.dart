@@ -1,9 +1,7 @@
 import 'package:firebase_database/firebase_database.dart';
-import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../../core/firebase/app_database.dart';
-import '../../../phase1_spike/spike_keys.dart';
 import '../../online/models/online_session.dart';
 import '../models/talk_session.dart';
 
@@ -96,11 +94,6 @@ class TalkRepository {
       'talkSessionId': talkSessionId,
     });
 
-    FlutterForegroundTask.sendDataToTask({
-      taskCommandKey: taskCommandEnableMic,
-      taskTalkSessionIdKey: talkSessionId,
-    });
-
     return talkSession;
   }
 
@@ -109,11 +102,6 @@ class TalkRepository {
     String reason = 'released',
   }) async {
     final now = _nowSeconds();
-
-    FlutterForegroundTask.sendDataToTask({
-      taskCommandKey: taskCommandDisableMic,
-      taskTalkSessionIdKey: talkSession.talkSessionId,
-    });
 
     await _database.ref('talkLocks/${talkSession.groupId}').runTransaction((
       current,

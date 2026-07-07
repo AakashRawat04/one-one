@@ -130,59 +130,31 @@ export async function joinInvite(input: JoinInviteInput) {
   }
 
   const now = nowSeconds();
-  const memberRef = db.ref(`groupMembers/${invite.groupId}`);
-  const membership = await memberRef.transaction((current) => {
-    const members = isRecord(current) ? current : {};
-    const activeCount = Object.values(members).filter((member) => {
-      return isRecord(member) && member.memberState === "active";
-    }).length;
+  const membersSnapshot = await db.ref(`groupMembers/${invite.groupId}`).get();
+  const members = isRecord(membersSnapshot.val())
+    ? (membersSnapshot.val() as Record<string, unknown>)
+    : {};
+  const activeCount = Object.values(members).filter((member) => {
+    return isRecord(member) && member.memberState === "active";
+  }).length;
 
-    if (activeCount >= group.maxMembers) {
-      return;
-    }
-
-    return {
-      ...members,
-      [input.userId]: {
-        role: "member",
-        memberState: "active",
-        mutedBySelf: false,
-        joinedAt: now,
-        leftAt: null
-      }
-    };
-  });
-
-  if (!membership.committed) {
+  if (activeCount >= group.maxMembers) {
     throw new HttpError(409, "group_full", "Group already has the maximum number of members.");
   }
 
-  const inviteUpdate = await db.ref(`groupInvites/${invite.inviteId}`).transaction((current) => {
-    if (!isRecord(current)) {
-      return;
-    }
+  const latestInvite = await readActiveInviteById(invite.inviteId, now);
 
-    const usedCount = readNumber(current.usedCount, 0);
-    const maxUsesValue = readNumber(current.maxUses, invite.maxUses);
-    const expiresAt = readNumber(current.expiresAt, 0);
-    const revokedAt = current.revokedAt;
-
-    if (revokedAt != null || expiresAt <= now || usedCount >= maxUsesValue) {
-      return;
-    }
-
-    return {
-      ...current,
-      usedCount: usedCount + 1
-    };
+  await db.ref().update({
+    [`groupMembers/${invite.groupId}/${input.userId}`]: {
+      role: "member",
+      memberState: "active",
+      mutedBySelf: false,
+      joinedAt: now,
+      leftAt: null
+    },
+    [`groupInvites/${invite.inviteId}/usedCount`]: latestInvite.usedCount + 1,
+    [`memberAvailability/${invite.groupId}/${input.userId}`]: defaultAvailability(now)
   });
-
-  if (!inviteUpdate.committed) {
-    await db.ref(`groupMembers/${invite.groupId}/${input.userId}`).remove();
-    throw new HttpError(409, "invite_unavailable", "Invite is expired or fully used.");
-  }
-
-  await db.ref(`memberAvailability/${invite.groupId}/${input.userId}`).set(defaultAvailability(now));
 
   return {
     groupId: invite.groupId,
@@ -191,9 +163,20 @@ export async function joinInvite(input: JoinInviteInput) {
 }
 
 export async function requireActiveUser(userId: string) {
-  const snapshot = await getRealtimeDatabase().ref(`users/${userId}`).get();
+  const ref = getRealtimeDatabase().ref(`users/${userId}`);
+  const snapshot = await ref.get();
+
   if (!snapshot.exists()) {
-    throw new HttpError(403, "user_not_found", "User profile does not exist.");
+    const now = nowSeconds();
+    await ref.set({
+      displayName: defaultDisplayName(userId),
+      authProvider: "anonymous",
+      accountState: "active",
+      createdAt: now,
+      updatedAt: now,
+      lastSeenAt: now
+    });
+    return;
   }
 
   if ((snapshot.child("accountState").val() ?? "active") !== "active") {
@@ -231,9 +214,23 @@ export async function requireActiveGroupMember(groupId: string, userId: string) 
 }
 
 export async function requireActiveUserDevice(userId: string, deviceId: string) {
-  const snapshot = await getRealtimeDatabase().ref(`userDevices/${userId}/${deviceId}`).get();
+  const ref = getRealtimeDatabase().ref(`userDevices/${userId}/${deviceId}`);
+  const snapshot = await ref.get();
 
-  if (!snapshot.exists() || (snapshot.child("deviceState").val() ?? "active") !== "active") {
+  if (!snapshot.exists()) {
+    const now = nowSeconds();
+    await ref.set({
+      platform: "android",
+      appVersion: "unknown",
+      deviceState: "active",
+      createdAt: now,
+      updatedAt: now,
+      lastSeenAt: now
+    });
+    return;
+  }
+
+  if ((snapshot.child("deviceState").val() ?? "active") !== "active") {
     throw new HttpError(403, "device_not_active", "Device is not active for this user.");
   }
 }
@@ -241,11 +238,7 @@ export async function requireActiveUserDevice(userId: string, deviceId: string) 
 async function findActiveInvite(inviteCode: string) {
   const now = nowSeconds();
   const hash = hashInviteCode(inviteCode);
-  const snapshot = await getRealtimeDatabase()
-    .ref("groupInvites")
-    .orderByChild("inviteCodeHash")
-    .equalTo(hash)
-    .get();
+  const snapshot = await getRealtimeDatabase().ref("groupInvites").get();
 
   if (!snapshot.exists() || !isRecord(snapshot.val())) {
     throw new HttpError(404, "invite_not_found", "Invite code is invalid.");
@@ -253,6 +246,7 @@ async function findActiveInvite(inviteCode: string) {
 
   for (const [inviteId, value] of Object.entries(snapshot.val() as Record<string, unknown>)) {
     if (!isRecord(value)) continue;
+    if (value.inviteCodeHash !== hash) continue;
 
     const expiresAt = readNumber(value.expiresAt, 0);
     const maxUsesValue = readNumber(value.maxUses, 0);
@@ -265,11 +259,36 @@ async function findActiveInvite(inviteCode: string) {
     return {
       inviteId,
       groupId: value.groupId?.toString() ?? "",
-      maxUses: maxUsesValue
+      maxUses: maxUsesValue,
+      usedCount,
+      expiresAt
     };
   }
 
   throw new HttpError(409, "invite_unavailable", "Invite is expired or fully used.");
+}
+
+async function readActiveInviteById(inviteId: string, now: number) {
+  const snapshot = await getRealtimeDatabase().ref(`groupInvites/${inviteId}`).get();
+
+  if (!snapshot.exists() || !isRecord(snapshot.val())) {
+    throw new HttpError(409, "invite_unavailable", "Invite is expired or fully used.");
+  }
+
+  const value = snapshot.val() as Record<string, unknown>;
+  const usedCount = readNumber(value.usedCount, 0);
+  const maxUsesValue = readNumber(value.maxUses, 0);
+  const expiresAt = readNumber(value.expiresAt, 0);
+
+  if (value.revokedAt != null || expiresAt <= now || usedCount >= maxUsesValue) {
+    throw new HttpError(409, "invite_unavailable", "Invite is expired or fully used.");
+  }
+
+  return {
+    usedCount,
+    maxUses: maxUsesValue,
+    expiresAt
+  };
 }
 
 function defaultAvailability(now: number) {
@@ -294,6 +313,11 @@ function generateInviteCode() {
 
 function hashInviteCode(inviteCode: string) {
   return createHash("sha256").update(inviteCode.trim().toUpperCase()).digest("hex");
+}
+
+function defaultDisplayName(userId: string) {
+  const suffix = userId.length >= 4 ? userId.slice(0, 4) : userId;
+  return `Friend ${suffix}`;
 }
 
 function nowSeconds() {

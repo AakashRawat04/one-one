@@ -1,9 +1,8 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+import 'package:livekit_client/livekit_client.dart';
 
-import '../../../phase1_spike/spike_keys.dart';
 import '../../groups/models/group_summary.dart';
 import '../../identity/models/identity_session.dart';
 import '../../talk/data/talk_repository.dart';
@@ -36,27 +35,22 @@ class _OnlineScreenState extends State<OnlineScreen> {
       widget.talkRepository ?? TalkRepository();
   OnlineSession? _session;
   TalkSession? _talkSession;
+  Room? _room;
+  EventsListener<RoomEvent>? _roomListener;
   Timer? _heartbeatTimer;
   String _state = 'away';
   String? _message;
   bool _busy = false;
   bool _talkBusy = false;
-  bool _liveMarked = false;
-
-  @override
-  void initState() {
-    super.initState();
-    FlutterForegroundTask.addTaskDataCallback(_onTaskData);
-  }
 
   @override
   void dispose() {
-    FlutterForegroundTask.removeTaskDataCallback(_onTaskData);
     _heartbeatTimer?.cancel();
     final activeTalk = _talkSession;
     if (activeTalk != null) {
       unawaited(_talkRepository.stopTalk(activeTalk, reason: 'screen_closed'));
     }
+    unawaited(_disconnectLiveKit());
     super.dispose();
   }
 
@@ -67,24 +61,37 @@ class _OnlineScreenState extends State<OnlineScreen> {
       _message = null;
     });
 
+    OnlineSession? createdSession;
     try {
-      final session = await _onlineRepository.goOnline(
+      createdSession = await _onlineRepository.goOnline(
         identity: widget.identity,
         group: widget.group,
       );
+      await _connectLiveKit(createdSession);
+      await _onlineRepository.markLive(createdSession);
       _heartbeatTimer?.cancel();
       _heartbeatTimer = Timer.periodic(const Duration(seconds: 10), (_) {
         final activeSession = _session;
         if (activeSession != null) {
-          _onlineRepository.heartbeat(activeSession);
+          unawaited(_onlineRepository.heartbeat(activeSession));
         }
       });
 
       setState(() {
-        _session = session;
-        _message = 'Foreground service requested';
+        _session = createdSession;
+        _state = 'live';
+        _message = 'Live';
       });
     } catch (error) {
+      await _disconnectLiveKit();
+      if (createdSession != null) {
+        try {
+          await _onlineRepository.goAway(createdSession);
+        } catch (_) {
+          // Best-effort cleanup after a failed connect.
+        }
+      }
+      if (!mounted) return;
       setState(() {
         _state = 'away';
         _message = error.toString();
@@ -115,12 +122,12 @@ class _OnlineScreenState extends State<OnlineScreen> {
       }
       _heartbeatTimer?.cancel();
       _heartbeatTimer = null;
+      await _disconnectLiveKit();
       await _onlineRepository.goAway(session);
       setState(() {
         _session = null;
         _talkSession = null;
         _state = 'away';
-        _liveMarked = false;
         _message = 'Away';
       });
     } catch (error) {
@@ -141,17 +148,24 @@ class _OnlineScreenState extends State<OnlineScreen> {
       _message = null;
     });
 
+    TalkSession? startedTalk;
     try {
-      final talkSession = await _talkRepository.startTalk(session);
+      startedTalk = await _talkRepository.startTalk(session);
+      await _setMicrophoneEnabled(true);
       if (!mounted) return;
       setState(() {
-        _talkSession = talkSession;
+        _talkSession = startedTalk;
         _state = 'talking';
         _message = 'Talking';
       });
     } catch (error) {
+      if (startedTalk != null) {
+        await _talkRepository.stopTalk(startedTalk, reason: 'mic_failed');
+      }
       if (!mounted) return;
       setState(() {
+        _talkSession = null;
+        _state = _session == null ? 'away' : 'live';
         _message = error.toString();
       });
     } finally {
@@ -171,6 +185,7 @@ class _OnlineScreenState extends State<OnlineScreen> {
     });
 
     try {
+      await _setMicrophoneEnabled(false);
       await _talkRepository.stopTalk(talkSession, reason: reason);
     } catch (error) {
       if (!mounted) return;
@@ -180,40 +195,127 @@ class _OnlineScreenState extends State<OnlineScreen> {
     }
   }
 
-  void _onTaskData(Object data) {
-    if (data is! Map) return;
+  Future<void> _connectLiveKit(OnlineSession session) async {
+    await _disconnectLiveKit();
 
-    final status = data[taskStatusKey]?.toString();
-    final message = data[taskMessageKey]?.toString();
-    if (status == null) return;
+    final room = Room(
+      roomOptions: const RoomOptions(
+        adaptiveStream: false,
+        dynacast: false,
+        defaultAudioOutputOptions: AudioOutputOptions(speakerOn: true),
+      ),
+    );
+
+    _room = room;
+    _attachRoomListener(room);
 
     setState(() {
-      _state = status;
-      if (message != null && message.isNotEmpty) {
-        _message = message;
-      }
+      _state = 'connecting';
+      _message = 'Connecting to LiveKit';
     });
 
-    final session = _session;
-    if (session != null && status == 'connected' && !_liveMarked) {
-      _liveMarked = true;
-      _markLive(session);
+    await room
+        .connect(
+          session.livekitServerUrl,
+          session.livekitToken,
+          connectOptions: const ConnectOptions(autoSubscribe: true),
+        )
+        .timeout(const Duration(seconds: 20));
+
+    try {
+      await room.setSpeakerOn(true);
+    } catch (_) {
+      // Non-fatal. LiveKit can still use the platform default audio route.
     }
+
+    final localParticipant = room.localParticipant;
+    if (localParticipant == null) {
+      throw StateError('LiveKit connected without a local participant.');
+    }
+
+    await localParticipant
+        .setMicrophoneEnabled(false)
+        .timeout(const Duration(seconds: 8));
   }
 
-  Future<void> _markLive(OnlineSession session) async {
+  void _attachRoomListener(Room room) {
+    _roomListener = room.createListener()
+      ..on<RoomConnectedEvent>((_) {
+        _setMessage('LiveKit connected');
+      })
+      ..on<RoomReconnectingEvent>((_) {
+        _setStateAndMessage('reconnecting', 'LiveKit reconnecting');
+      })
+      ..on<RoomReconnectedEvent>((_) {
+        _setStateAndMessage('live', 'LiveKit reconnected');
+      })
+      ..on<RoomDisconnectedEvent>((event) {
+        _setStateAndMessage(
+          'disconnected',
+          'LiveKit disconnected: ${event.reason}',
+        );
+      })
+      ..on<ParticipantConnectedEvent>((event) {
+        _setMessage('${event.participant.identity} joined');
+      })
+      ..on<TrackSubscribedEvent>((event) {
+        final isAudio = event.track is RemoteAudioTrack;
+        _setMessage(
+          isAudio
+              ? 'Audio subscribed from ${event.participant.identity}'
+              : 'Track subscribed from ${event.participant.identity}',
+        );
+      })
+      ..on<ActiveSpeakersChangedEvent>((event) {
+        final remoteSpeakers = event.speakers.where(
+          (speaker) => speaker.identity != room.localParticipant?.identity,
+        );
+        if (remoteSpeakers.isNotEmpty) {
+          _setMessage('Receiving voice');
+        }
+      });
+  }
+
+  Future<void> _disconnectLiveKit() async {
+    final room = _room;
+    _room = null;
+    _roomListener?.dispose();
+    _roomListener = null;
+
     try {
-      await _onlineRepository.markLive(session);
-      if (!mounted) return;
-      setState(() {
-        _message = 'Live';
-      });
-    } catch (error) {
-      if (!mounted) return;
-      setState(() {
-        _message = 'Connected, but state sync failed: $error';
-      });
+      final localParticipant = room?.localParticipant;
+      if (localParticipant != null) {
+        await localParticipant.setMicrophoneEnabled(false);
+      }
+    } catch (_) {
+      // Ignore cleanup failures.
     }
+
+    await room?.disconnect();
+  }
+
+  Future<void> _setMicrophoneEnabled(bool enabled) async {
+    final participant = _room?.localParticipant;
+    if (participant == null) {
+      throw StateError('LiveKit is not connected yet.');
+    }
+
+    await participant
+        .setMicrophoneEnabled(enabled)
+        .timeout(const Duration(seconds: 8));
+  }
+
+  void _setMessage(String message) {
+    if (!mounted) return;
+    setState(() => _message = message);
+  }
+
+  void _setStateAndMessage(String state, String message) {
+    if (!mounted) return;
+    setState(() {
+      _state = state;
+      _message = message;
+    });
   }
 
   @override

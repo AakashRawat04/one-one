@@ -1,14 +1,9 @@
-import 'dart:async';
-
 import 'package:firebase_database/firebase_database.dart';
-import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../../core/firebase/app_database.dart';
 import '../../../core/network/api_client.dart';
-import '../../../phase1_spike/spike_keys.dart';
-import '../../../phase1_spike/walkie_foreground_task.dart';
 import '../../groups/models/group_summary.dart';
 import '../../identity/models/identity_session.dart';
 import '../models/livekit_token_response.dart';
@@ -44,6 +39,10 @@ class OnlineRepository {
       deviceId: identity.deviceId,
       serviceSessionId: serviceSessionId,
       livekitSessionId: livekitSessionId,
+      livekitServerUrl: token.serverUrl,
+      livekitToken: token.token,
+      livekitRoomName: token.roomName,
+      participantIdentity: token.participantIdentity,
       startedAt: now,
     );
 
@@ -87,20 +86,6 @@ class OnlineRepository {
       },
     });
 
-    await FlutterForegroundTask.saveData(
-      key: serviceSessionIdKey,
-      value: serviceSessionId,
-    );
-    await FlutterForegroundTask.saveData(
-      key: liveKitUrlKey,
-      value: token.serverUrl,
-    );
-    await FlutterForegroundTask.saveData(
-      key: liveKitTokenKey,
-      value: token.token,
-    );
-
-    await _startForegroundService();
     return session;
   }
 
@@ -144,11 +129,6 @@ class OnlineRepository {
   Future<void> goAway(OnlineSession session) async {
     final now = _nowSeconds();
 
-    FlutterForegroundTask.sendDataToTask({
-      taskCommandKey: taskCommandDisconnect,
-    });
-    await FlutterForegroundTask.stopService();
-
     await _database.ref().update({
       'appServiceSessions/${session.serviceSessionId}/serviceState': 'stopped',
       'appServiceSessions/${session.serviceSessionId}/stopReason': 'user_away',
@@ -189,39 +169,12 @@ class OnlineRepository {
     return LiveKitTokenResponse.fromJson(response);
   }
 
-  Future<void> _startForegroundService() async {
-    if (await FlutterForegroundTask.isRunningService) {
-      await FlutterForegroundTask.restartService();
-      return;
-    }
-
-    await FlutterForegroundTask.startService(
-      serviceId: 101,
-      serviceTypes: const [
-        ForegroundServiceTypes.mediaPlayback,
-        ForegroundServiceTypes.microphone,
-      ],
-      notificationTitle: 'One One is online',
-      notificationText: 'Connecting to LiveKit',
-      notificationButtons: const [
-        NotificationButton(id: 'stop', text: 'Go away'),
-      ],
-      notificationInitialRoute: '/',
-      callback: walkieForegroundServiceCallback,
-    );
-  }
-
   Future<void> _requestOnlinePermissions() async {
-    final notificationPermission =
-        await FlutterForegroundTask.checkNotificationPermission();
-    if (notificationPermission != NotificationPermission.granted) {
-      await FlutterForegroundTask.requestNotificationPermission();
-    }
-
-    await Permission.microphone.request();
-
-    if (!await FlutterForegroundTask.isIgnoringBatteryOptimizations) {
-      await FlutterForegroundTask.requestIgnoreBatteryOptimization();
+    final micStatus = await Permission.microphone.request();
+    if (!micStatus.isGranted) {
+      throw StateError(
+        'Microphone permission is required before going online.',
+      );
     }
   }
 

@@ -58,7 +58,7 @@ export function createApp() {
         return;
       }
 
-      logger.error({ error }, "unhandled request error");
+      logger.error({ error: serializeError(error) }, "unhandled request error");
       response.status(500).json({
         error: "internal_server_error"
       });
@@ -66,4 +66,30 @@ export function createApp() {
   );
 
   return app;
+}
+
+function serializeError(error: unknown) {
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+      stack: error.stack
+    };
+  }
+
+  if (typeof error === "object" && error !== null) {
+    const record = error as Record<string, unknown>;
+    return {
+      name: record.name,
+      message: record.message,
+      code: record.code,
+      stack: record.stack,
+      value: record
+    };
+  }
+
+  return {
+    message: String(error),
+    value: error
+  };
 }
