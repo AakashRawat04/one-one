@@ -8,6 +8,7 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import '../../../app/accent_theme.dart';
 import '../../../core/firebase/app_database.dart';
 import '../models/app_user_profile.dart';
 import '../models/identity_session.dart';
@@ -48,7 +49,7 @@ class IdentityRepository {
     );
     final permissions = await _readPermissionDiagnostics();
 
-    final session = IdentitySession(
+    final localSession = IdentitySession(
       user: AppUserProfile(
         userId: firebaseUser.uid,
         displayName: _defaultDisplayName(firebaseUser.uid),
@@ -75,7 +76,21 @@ class IdentityRepository {
       settings: UserSettingsRecord.defaults(now),
     );
 
-    _cachedSession = session;
+    _cachedSession = localSession;
+    final syncedSession = await _optionalStartupValue(
+      _syncRemoteIdentityState(
+        userId: firebaseUser.uid,
+        localDevice: localDevice,
+        appVersion: appVersion,
+        permissions: permissions,
+        now: now,
+      ),
+    );
+
+    if (syncedSession != null) {
+      return syncedSession;
+    }
+
     unawaited(
       _syncRemoteIdentityState(
         userId: firebaseUser.uid,
@@ -86,7 +101,7 @@ class IdentityRepository {
       ),
     );
 
-    return session;
+    return localSession;
   }
 
   Future<IdentitySession> updateDisplayName(String displayName) async {
@@ -117,6 +132,48 @@ class IdentityRepository {
         ),
         device: session.device,
         settings: session.settings,
+      );
+      _cachedSession = updatedSession;
+      return updatedSession;
+    }
+
+    return ensureIdentity();
+  }
+
+  Future<IdentitySession> updateSettings({
+    required String accentColorKey,
+    required bool hapticsEnabled,
+    required String audioOutputPreference,
+  }) async {
+    final user = _auth.currentUser;
+    if (user == null) {
+      throw StateError('Cannot update settings before sign-in.');
+    }
+
+    final cleanAccentKey =
+        accentOptions.any((option) => option.key == accentColorKey)
+        ? accentColorKey
+        : 'coral';
+    final cleanAudioPreference = audioOutputPreference == 'earpiece'
+        ? 'earpiece'
+        : 'speaker';
+    final now = _nowSeconds();
+    final settings =
+        (_cachedSession?.settings ?? UserSettingsRecord.defaults(now)).copyWith(
+          accentColorKey: cleanAccentKey,
+          hapticsEnabled: hapticsEnabled,
+          audioOutputPreference: cleanAudioPreference,
+          updatedAt: now,
+        );
+
+    await _database.ref('userSettings/${user.uid}').update(settings.toJson());
+
+    final session = _cachedSession;
+    if (session != null) {
+      final updatedSession = IdentitySession(
+        user: session.user,
+        device: session.device,
+        settings: settings,
       );
       _cachedSession = updatedSession;
       return updatedSession;
@@ -219,7 +276,7 @@ class IdentityRepository {
     return device;
   }
 
-  Future<void> _syncRemoteIdentityState({
+  Future<IdentitySession?> _syncRemoteIdentityState({
     required String userId,
     required LocalDeviceIdentity localDevice,
     required String appVersion,
@@ -237,13 +294,16 @@ class IdentityRepository {
         now: now,
       );
 
-      _cachedSession = IdentitySession(
+      final session = IdentitySession(
         user: user,
         device: device,
         settings: settings,
       );
+      _cachedSession = session;
+      return session;
     } catch (_) {
       // Keep startup responsive even if the database sync is slow or fails.
+      return null;
     }
   }
 

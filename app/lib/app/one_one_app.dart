@@ -5,6 +5,7 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import '../features/identity/data/identity_repository.dart';
 import '../features/identity/models/identity_session.dart';
 import '../features/identity/ui/identity_home_screen.dart';
+import 'accent_theme.dart';
 import 'firebase_setup_blocked_screen.dart';
 
 class OneOneApp extends StatelessWidget {
@@ -12,17 +13,64 @@ class OneOneApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'One One',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xff00c2a8),
-          brightness: Brightness.light,
-        ),
-        useMaterial3: true,
-      ),
-      home: const WithForegroundTask(child: _FirebaseGate()),
+    return ValueListenableBuilder<String>(
+      valueListenable: AccentThemeController.accentKey,
+      builder: (context, accentKey, _) {
+        final seedColor = accentColorForKey(accentKey);
+
+        return MaterialApp(
+          title: 'One One',
+          debugShowCheckedModeBanner: false,
+          theme: ThemeData(
+            colorScheme: ColorScheme.fromSeed(
+              seedColor: seedColor,
+              brightness: Brightness.light,
+            ),
+            useMaterial3: true,
+          ),
+          home: const WithForegroundTask(child: _FirebaseGate()),
+        );
+      },
+    );
+  }
+}
+
+class _AccentBootstrap extends StatefulWidget {
+  const _AccentBootstrap({
+    required this.session,
+    required this.identityRepository,
+  });
+
+  final IdentitySession session;
+  final IdentityRepository identityRepository;
+
+  @override
+  State<_AccentBootstrap> createState() => _AccentBootstrapState();
+}
+
+class _AccentBootstrapState extends State<_AccentBootstrap> {
+  @override
+  void initState() {
+    super.initState();
+    AccentThemeController.setAccentKey(widget.session.settings.accentColorKey);
+  }
+
+  @override
+  void didUpdateWidget(covariant _AccentBootstrap oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.session.settings.accentColorKey !=
+        widget.session.settings.accentColorKey) {
+      AccentThemeController.setAccentKey(
+        widget.session.settings.accentColorKey,
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return IdentityHomeScreen(
+      initialSession: widget.session,
+      identityRepository: widget.identityRepository,
     );
   }
 }
@@ -91,8 +139,8 @@ class _IdentityGateState extends State<_IdentityGate> {
           );
         }
 
-        return IdentityHomeScreen(
-          initialSession: snapshot.requireData,
+        return _AccentBootstrap(
+          session: snapshot.requireData,
           identityRepository: _identityRepository,
         );
       },

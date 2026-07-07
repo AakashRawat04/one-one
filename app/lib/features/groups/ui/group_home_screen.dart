@@ -210,7 +210,7 @@ class _GroupHomeScreenState extends State<GroupHomeScreen> {
                   const Text('No groups yet.')
                 else
                   DropdownButtonFormField<String>(
-                    value: _selectedGroup?.groupId,
+                    initialValue: _selectedGroup?.groupId,
                     items: [
                       for (final group in groups)
                         DropdownMenuItem(
