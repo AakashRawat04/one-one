@@ -29,6 +29,7 @@ class IdentityRepository {
   final FirebaseAuth _auth;
   final FirebaseDatabase _database;
   final DeviceIdentityStore _deviceIdentityStore;
+  IdentitySession? _cachedSession;
 
   Future<IdentitySession> ensureIdentity() async {
     final firebaseUser = await _requiredStartupStep(
@@ -46,26 +47,45 @@ class IdentityRepository {
     );
     final permissions = await _readPermissionDiagnostics();
 
-    final user = await _requiredStartupStep(
-      _upsertUserProfile(firebaseUser.uid, now),
-      'Firebase Database user profile sync',
+    final session = IdentitySession(
+      user: AppUserProfile(
+        userId: firebaseUser.uid,
+        displayName: _defaultDisplayName(firebaseUser.uid),
+        authProvider: 'anonymous',
+        accountState: 'active',
+        createdAt: now,
+        updatedAt: now,
+        lastSeenAt: now,
+      ),
+      device: UserDeviceRecord(
+        deviceId: localDevice.deviceId,
+        platform: Platform.isAndroid ? 'android' : Platform.operatingSystem,
+        appVersion: appVersion,
+        installId: localDevice.installId,
+        micPermissionGranted: permissions.micPermissionGranted,
+        notificationPermissionGranted:
+            permissions.notificationPermissionGranted,
+        batteryOptimizationIgnored: permissions.batteryOptimizationIgnored,
+        deviceState: 'active',
+        createdAt: now,
+        updatedAt: now,
+        lastSeenAt: now,
+      ),
+      settings: UserSettingsRecord.defaults(now),
     );
-    final settings = await _requiredStartupStep(
-      _ensureUserSettings(firebaseUser.uid, now),
-      'Firebase Database user settings sync',
-    );
-    final device = await _requiredStartupStep(
-      _upsertUserDevice(
+
+    _cachedSession = session;
+    unawaited(
+      _syncRemoteIdentityState(
         userId: firebaseUser.uid,
         localDevice: localDevice,
         appVersion: appVersion,
         permissions: permissions,
         now: now,
       ),
-      'Firebase Database device sync',
     );
 
-    return IdentitySession(user: user, device: device, settings: settings);
+    return session;
   }
 
   Future<IdentitySession> updateDisplayName(String displayName) async {
@@ -85,6 +105,21 @@ class IdentityRepository {
       'updatedAt': now,
       'lastSeenAt': now,
     });
+
+    final session = _cachedSession;
+    if (session != null) {
+      final updatedSession = IdentitySession(
+        user: session.user.copyWith(
+          displayName: cleanName,
+          updatedAt: now,
+          lastSeenAt: now,
+        ),
+        device: session.device,
+        settings: session.settings,
+      );
+      _cachedSession = updatedSession;
+      return updatedSession;
+    }
 
     return ensureIdentity();
   }
@@ -181,6 +216,34 @@ class IdentityRepository {
 
     await ref.set(device.toJson());
     return device;
+  }
+
+  Future<void> _syncRemoteIdentityState({
+    required String userId,
+    required LocalDeviceIdentity localDevice,
+    required String appVersion,
+    required _PermissionDiagnostics permissions,
+    required int now,
+  }) async {
+    try {
+      final user = await _upsertUserProfile(userId, now);
+      final settings = await _ensureUserSettings(userId, now);
+      final device = await _upsertUserDevice(
+        userId: userId,
+        localDevice: localDevice,
+        appVersion: appVersion,
+        permissions: permissions,
+        now: now,
+      );
+
+      _cachedSession = IdentitySession(
+        user: user,
+        device: device,
+        settings: settings,
+      );
+    } catch (_) {
+      // Keep startup responsive even if the database sync is slow or fails.
+    }
   }
 
   Future<String> _readAppVersion() async {
