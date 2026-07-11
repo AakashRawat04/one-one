@@ -8,6 +8,8 @@ import 'package:livekit_client/livekit_client.dart';
 import '../../../app/accent_theme.dart';
 import '../../../core/firebase/app_database.dart';
 import '../../groups/data/group_repository.dart';
+import '../../groups/ui/waiting_for_group_members_screen.dart';
+import 'no_groups_screen.dart';
 import '../../groups/models/group_invite_result.dart';
 import '../../groups/models/group_member_summary.dart';
 import '../../groups/models/group_summary.dart';
@@ -86,7 +88,19 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
   Future<void> _loadGroups() async {
     setState(() => _loadingGroups = true);
     try {
-      final groups = await _groupRepository.loadGroupsForUser(_session.userId);
+      final resolution = await _groupRepository.resolveGroupEntry(_session.userId);
+      if (!mounted) return;
+
+      if (resolution.kind != GroupEntryKind.home &&
+          (ModalRoute.of(context)?.isCurrent ?? true)) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          unawaited(_replaceWithGroupEntry(resolution));
+        });
+        return;
+      }
+
+      final groups = resolution.groups;
       final selected = _resolveSelectedGroup(groups);
 
       if (!mounted) return;
@@ -100,6 +114,16 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
         }
       });
 
+      // If this is the first load and the user has no groups, navigate
+      // to the dedicated no-groups screen so the new UI is shown.
+      if (groups.isEmpty && (ModalRoute.of(context)?.isCurrent ?? true)) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          _replaceWithGroupEntry(const GroupEntryResolution.noGroups());
+        });
+        return;
+      }
+
       if (selected != null) {
         await _loadMembers(selected.groupId);
         _listenToAvailability(selected.groupId);
@@ -108,9 +132,39 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
       if (!mounted) return;
       setState(() => _message = error.toString());
     } finally {
-      if (mounted) {
+      if (mounted && _loadingGroups) {
         setState(() => _loadingGroups = false);
       }
+    }
+  }
+
+  Future<void> _replaceWithGroupEntry(GroupEntryResolution resolution) async {
+    switch (resolution.kind) {
+      case GroupEntryKind.noGroups:
+        await Navigator.of(context).pushReplacement(
+          MaterialPageRoute<void>(
+            builder: (_) => NoGroupsScreen(
+              session: _session,
+              identityRepository: widget.identityRepository,
+            ),
+          ),
+        );
+      case GroupEntryKind.waiting:
+        final group = resolution.group!;
+        final invite = await _groupRepository.createInvite(group.groupId);
+        if (!mounted) return;
+        await Navigator.of(context).pushReplacement(
+          MaterialPageRoute<void>(
+            builder: (_) => WaitingForGroupMembersScreen(
+              group: group,
+              invite: invite,
+              session: _session,
+              identityRepository: widget.identityRepository,
+            ),
+          ),
+        );
+      case GroupEntryKind.home:
+        break;
     }
   }
 

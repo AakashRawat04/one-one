@@ -7,6 +7,7 @@ class AppUserProfile {
     required this.createdAt,
     required this.updatedAt,
     required this.lastSeenAt,
+    this.profilePhotoBase64,
   });
 
   final String userId;
@@ -16,9 +17,10 @@ class AppUserProfile {
   final int createdAt;
   final int updatedAt;
   final int lastSeenAt;
+  final String? profilePhotoBase64;
 
   Map<String, Object?> toJson() {
-    return {
+    final data = <String, Object?>{
       'displayName': displayName,
       'authProvider': authProvider,
       'accountState': accountState,
@@ -26,6 +28,12 @@ class AppUserProfile {
       'updatedAt': updatedAt,
       'lastSeenAt': lastSeenAt,
     };
+
+    if (profilePhotoBase64 != null) {
+      data['profilePhotoBase64'] = profilePhotoBase64;
+    }
+
+    return data;
   }
 
   static AppUserProfile fromJson(String userId, Map<Object?, Object?> data) {
@@ -37,6 +45,7 @@ class AppUserProfile {
       createdAt: _readInt(data['createdAt']),
       updatedAt: _readInt(data['updatedAt']),
       lastSeenAt: _readInt(data['lastSeenAt']),
+      profilePhotoBase64: data['profilePhotoBase64']?.toString(),
     );
   }
 
@@ -44,6 +53,7 @@ class AppUserProfile {
     String? displayName,
     int? updatedAt,
     int? lastSeenAt,
+    String? profilePhotoBase64,
   }) {
     return AppUserProfile(
       userId: userId,
@@ -53,6 +63,7 @@ class AppUserProfile {
       createdAt: createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
       lastSeenAt: lastSeenAt ?? this.lastSeenAt,
+      profilePhotoBase64: profilePhotoBase64 ?? this.profilePhotoBase64,
     );
   }
 }
