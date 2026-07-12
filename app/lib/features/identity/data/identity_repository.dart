@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -58,6 +60,7 @@ class IdentityRepository {
         createdAt: now,
         updatedAt: now,
         lastSeenAt: now,
+        profilePhotoBase64: _cachedSession?.user.profilePhotoBase64,
       ),
       device: UserDeviceRecord(
         deviceId: localDevice.deviceId,
@@ -174,6 +177,38 @@ class IdentityRepository {
         user: session.user,
         device: session.device,
         settings: settings,
+      );
+      _cachedSession = updatedSession;
+      return updatedSession;
+    }
+
+    return ensureIdentity();
+  }
+
+  Future<IdentitySession> updateProfilePhoto(Uint8List imageBytes) async {
+    final user = _auth.currentUser;
+    if (user == null) {
+      throw StateError('Cannot update profile photo before sign-in.');
+    }
+
+    final encodedPhoto = base64Encode(imageBytes);
+    final now = _nowSeconds();
+    await _database.ref('users/${user.uid}').update({
+      'profilePhotoBase64': encodedPhoto,
+      'updatedAt': now,
+      'lastSeenAt': now,
+    });
+
+    final session = _cachedSession;
+    if (session != null) {
+      final updatedSession = IdentitySession(
+        user: session.user.copyWith(
+          profilePhotoBase64: encodedPhoto,
+          updatedAt: now,
+          lastSeenAt: now,
+        ),
+        device: session.device,
+        settings: session.settings,
       );
       _cachedSession = updatedSession;
       return updatedSession;

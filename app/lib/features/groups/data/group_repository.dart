@@ -6,6 +6,31 @@ import '../models/group_invite_result.dart';
 import '../models/group_member_summary.dart';
 import '../models/group_summary.dart';
 
+enum GroupEntryKind { noGroups, home, waiting }
+
+class GroupEntryResolution {
+  const GroupEntryResolution._({
+    required this.kind,
+    this.group,
+    this.groups = const [],
+  });
+
+  const GroupEntryResolution.noGroups()
+    : this._(kind: GroupEntryKind.noGroups);
+
+  const GroupEntryResolution.home({required List<GroupSummary> groups})
+    : this._(kind: GroupEntryKind.home, groups: groups);
+
+  const GroupEntryResolution.waiting({
+    required GroupSummary group,
+    required List<GroupSummary> groups,
+  }) : this._(kind: GroupEntryKind.waiting, group: group, groups: groups);
+
+  final GroupEntryKind kind;
+  final GroupSummary? group;
+  final List<GroupSummary> groups;
+}
+
 class GroupRepository {
   GroupRepository({ApiClient? apiClient, FirebaseDatabase? database})
     : _apiClient = apiClient ?? ApiClient(),
@@ -126,5 +151,45 @@ class GroupRepository {
     }
 
     return result;
+  }
+
+  Future<int> countActiveMembers(String groupId) async {
+    final snapshot = await _database.ref('groupMembers/$groupId').get();
+
+    if (snapshot.value is! Map<Object?, Object?>) {
+      return 0;
+    }
+
+    var count = 0;
+    for (final entry in (snapshot.value! as Map<Object?, Object?>).entries) {
+      final raw = entry.value;
+      if (raw is! Map<Object?, Object?>) continue;
+      if ((raw['memberState']?.toString() ?? 'active') == 'active') {
+        count++;
+      }
+    }
+
+    return count;
+  }
+
+  Future<GroupEntryResolution> resolveGroupEntry(String userId) async {
+    final groups = await loadGroupsForUser(userId);
+    if (groups.isEmpty) {
+      return const GroupEntryResolution.noGroups();
+    }
+
+    GroupSummary? soloGroup;
+    for (final group in groups) {
+      final memberCount = await countActiveMembers(group.groupId);
+      if (memberCount > 1) {
+        return GroupEntryResolution.home(groups: groups);
+      }
+      soloGroup ??= group;
+    }
+
+    return GroupEntryResolution.waiting(
+      group: soloGroup!,
+      groups: groups,
+    );
   }
 }
