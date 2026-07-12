@@ -90,11 +90,11 @@ class _StartupGateScreenState extends State<StartupGateScreen> {
         _nextScreen = ProfilePictureScreen(
           session: session,
           identityRepository: _identityRepository,
-          onComplete: () async {
+          onComplete: (updatedSession) async {
             if (!mounted) return;
             setState(() {
               _nextScreen = DisplayNameScreen(
-                session: session,
+                session: updatedSession,
                 identityRepository: _identityRepository,
                 onComplete: () async {
                   if (!mounted) return;
@@ -105,11 +105,11 @@ class _StartupGateScreenState extends State<StartupGateScreen> {
                         setState(() {
                           _nextScreen = BatteryOptimizationScreen(
                             onComplete: () async {
-                              await _markSetupComplete(session.userId);
+                              await _markSetupComplete(updatedSession.userId);
                               if (!mounted) return;
                               setState(() {
                                 _nextScreen = _GroupEntryBootstrap(
-                                  session: session,
+                                  session: updatedSession,
                                   identityRepository: _identityRepository,
                                 );
                               });
@@ -155,7 +155,7 @@ class _StartupGateScreenState extends State<StartupGateScreen> {
     }
 
     return Scaffold(
-      backgroundColor: const Color(0xfffe0000),
+      backgroundColor: const Color(0xffF8BE03),
       body: SafeArea(
         child: Stack(
           children: [
@@ -238,7 +238,7 @@ class _StartupGateScreenState extends State<StartupGateScreen> {
                             'by continuing you agree to our',
                             textAlign: TextAlign.center,
                             style: TextStyle(
-                              color: const Color.fromRGBO(255, 255, 255, 0.78),
+                              color: const Color.fromRGBO(56, 64, 71, 0.78),
                               fontSize: 11.sp,
                               height: 1.25,
                             ),
@@ -247,12 +247,12 @@ class _StartupGateScreenState extends State<StartupGateScreen> {
                             'terms & policies',
                             textAlign: TextAlign.center,
                             style: TextStyle(
-                              color: const Color.fromRGBO(255, 255, 255, 0.78),
+                              color: const Color.fromRGBO(56, 64, 71, 0.78),
                               fontSize: 11.sp,
                               height: 1.25,
                               decoration: TextDecoration.underline,
                               decorationColor:
-                                  const Color.fromRGBO(255, 255, 255, 0.78),
+                                  const Color.fromRGBO(56, 64, 71, 0.78),
                             ),
                           ),
                         ],

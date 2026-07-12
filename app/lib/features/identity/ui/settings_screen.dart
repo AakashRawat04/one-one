@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../../../app/accent_theme.dart';
 import '../data/identity_repository.dart';
 import '../models/identity_session.dart';
+import 'profile_avatar.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({
@@ -29,8 +31,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
       widget.session.settings.audioOutputPreference;
   late String _persistedAccentColorKey = widget.session.settings.accentColorKey;
   bool _saving = false;
+  bool _photoSaving = false;
   bool _hasUnsavedAccentPreview = false;
   String? _message;
+  final ImagePicker _imagePicker = ImagePicker();
 
   @override
   void dispose() {
@@ -39,6 +43,39 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
     _displayNameController.dispose();
     super.dispose();
+  }
+
+  Future<void> _changeProfilePhoto() async {
+    if (_saving || _photoSaving) return;
+
+    final pickedFile = await _imagePicker.pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 82,
+      maxWidth: 1600,
+    );
+    if (pickedFile == null) return;
+
+    final bytes = await pickedFile.readAsBytes();
+    if (!mounted) return;
+
+    setState(() {
+      _photoSaving = true;
+      _message = null;
+    });
+
+    try {
+      final session = await widget.identityRepository.updateProfilePhoto(bytes);
+      widget.onSessionChanged(session);
+      if (!mounted) return;
+      setState(() => _message = 'Profile photo updated');
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _message = error.toString());
+    } finally {
+      if (mounted) {
+        setState(() => _photoSaving = false);
+      }
+    }
   }
 
   Future<void> _save() async {
@@ -89,6 +126,51 @@ class _SettingsScreenState extends State<SettingsScreen> {
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
+            Center(
+              child: Column(
+                children: [
+                  Stack(
+                    alignment: Alignment.bottomRight,
+                    children: [
+                      ProfileAvatar(
+                        profilePhotoUrl: widget.session.user.profilePhotoUrl,
+                        profilePhotoBase64:
+                            widget.session.user.profilePhotoBase64,
+                        radius: 42,
+                      ),
+                      if (_photoSaving)
+                        const Positioned.fill(
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: Color(0x88000000),
+                              shape: BoxShape.circle,
+                            ),
+                            child: Center(
+                              child: SizedBox(
+                                width: 24,
+                                height: 24,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2.4,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  TextButton.icon(
+                    onPressed: _saving || _photoSaving
+                        ? null
+                        : _changeProfilePhoto,
+                    icon: const Icon(Icons.photo_camera_outlined),
+                    label: const Text('Change profile photo'),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 20),
             TextField(
               controller: _displayNameController,
               textInputAction: TextInputAction.done,

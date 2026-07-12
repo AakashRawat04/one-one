@@ -9,4 +9,16 @@ class AppConfig {
     defaultValue:
         'https://oneone-3adb5-default-rtdb.asia-southeast1.firebasedatabase.app',
   );
+
+  static const String cloudinaryCloudName = String.fromEnvironment(
+    'ONE_ONE_CLOUDINARY_CLOUD_NAME',
+    defaultValue: '',
+  );
+
+  static const String cloudinaryUploadPreset = String.fromEnvironment(
+    'ONE_ONE_CLOUDINARY_UPLOAD_PRESET',
+    defaultValue: '',
+  );
+
+  static const String cloudinaryProfileFolder = 'one_one/profile_photos';
 }

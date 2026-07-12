@@ -7,6 +7,7 @@ class AppUserProfile {
     required this.createdAt,
     required this.updatedAt,
     required this.lastSeenAt,
+    this.profilePhotoUrl,
     this.profilePhotoBase64,
   });
 
@@ -17,7 +18,18 @@ class AppUserProfile {
   final int createdAt;
   final int updatedAt;
   final int lastSeenAt;
+  final String? profilePhotoUrl;
   final String? profilePhotoBase64;
+
+  bool get hasProfilePhoto {
+    final url = profilePhotoUrl?.trim();
+    if (url != null && url.isNotEmpty) {
+      return true;
+    }
+
+    final encodedPhoto = profilePhotoBase64?.trim();
+    return encodedPhoto != null && encodedPhoto.isNotEmpty;
+  }
 
   Map<String, Object?> toJson() {
     final data = <String, Object?>{
@@ -28,6 +40,10 @@ class AppUserProfile {
       'updatedAt': updatedAt,
       'lastSeenAt': lastSeenAt,
     };
+
+    if (profilePhotoUrl != null) {
+      data['profilePhotoUrl'] = profilePhotoUrl;
+    }
 
     if (profilePhotoBase64 != null) {
       data['profilePhotoBase64'] = profilePhotoBase64;
@@ -45,6 +61,7 @@ class AppUserProfile {
       createdAt: _readInt(data['createdAt']),
       updatedAt: _readInt(data['updatedAt']),
       lastSeenAt: _readInt(data['lastSeenAt']),
+      profilePhotoUrl: data['profilePhotoUrl']?.toString(),
       profilePhotoBase64: data['profilePhotoBase64']?.toString(),
     );
   }
@@ -53,7 +70,10 @@ class AppUserProfile {
     String? displayName,
     int? updatedAt,
     int? lastSeenAt,
+    String? profilePhotoUrl,
     String? profilePhotoBase64,
+    bool clearProfilePhotoUrl = false,
+    bool clearProfilePhotoBase64 = false,
   }) {
     return AppUserProfile(
       userId: userId,
@@ -63,7 +83,12 @@ class AppUserProfile {
       createdAt: createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
       lastSeenAt: lastSeenAt ?? this.lastSeenAt,
-      profilePhotoBase64: profilePhotoBase64 ?? this.profilePhotoBase64,
+      profilePhotoUrl: clearProfilePhotoUrl
+          ? null
+          : (profilePhotoUrl ?? this.profilePhotoUrl),
+      profilePhotoBase64: clearProfilePhotoBase64
+          ? null
+          : (profilePhotoBase64 ?? this.profilePhotoBase64),
     );
   }
 }

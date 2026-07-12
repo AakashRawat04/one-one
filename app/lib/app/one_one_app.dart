@@ -63,7 +63,7 @@ class _FirebaseGateState extends State<_FirebaseGate> {
       builder: (context, snapshot) {
         if (snapshot.connectionState != ConnectionState.done) {
           return Scaffold(
-            backgroundColor: const Color(0xfffe0000),
+            backgroundColor: const Color(0xffF8BE03),
             body: SafeArea(
               child: Center(
                 child: Image.asset(
