@@ -48,6 +48,14 @@
         }
       }
     },
+    "handRaises": {
+      "$groupId": {
+        ".read": "auth != null",
+        "$userId": {
+          ".write": "auth != null && auth.uid == $userId"
+        }
+      }
+    },
     "appServiceSessions": {
       "$sessionId": {
         ".read": "auth != null && data.child('userId').val() == auth.uid",
