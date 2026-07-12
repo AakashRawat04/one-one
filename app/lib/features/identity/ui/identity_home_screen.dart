@@ -15,6 +15,7 @@ import '../../groups/models/group_invite_result.dart';
 import '../../groups/models/group_member_summary.dart';
 import '../../groups/models/group_summary.dart';
 import '../../online/data/online_repository.dart';
+import '../../online/models/member_availability.dart';
 import '../../online/models/online_session.dart';
 import '../../talk/data/talk_repository.dart';
 import '../../talk/models/talk_session.dart';
@@ -47,9 +48,10 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
   late IdentitySession _session = widget.initialSession;
   List<GroupSummary> _groups = const [];
   List<GroupMemberSummary> _members = const [];
-  Map<String, _Availability> _availability = const {};
+  Map<String, MemberAvailability> _availability = const {};
   GroupSummary? _selectedGroup;
   StreamSubscription<DatabaseEvent>? _availabilitySubscription;
+  Timer? _availabilityExpiryTimer;
   StreamSubscription<DatabaseEvent>? _membersSubscription;
 
   OnlineSession? _onlineSession;
@@ -81,6 +83,7 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
   void dispose() {
     _carouselController.dispose();
     _availabilitySubscription?.cancel();
+    _availabilityExpiryTimer?.cancel();
     _membersSubscription?.cancel();
     _heartbeatTimer?.cancel();
     final activeTalk = _talkSession;
@@ -186,20 +189,42 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
         .onValue
         .listen((event) {
           final value = event.snapshot.value;
-          final next = <String, _Availability>{};
+          final next = <String, MemberAvailability>{};
 
           if (value is Map<Object?, Object?>) {
             for (final entry in value.entries) {
               final raw = entry.value;
               if (raw is Map<Object?, Object?>) {
-                next[entry.key.toString()] = _Availability.fromJson(raw);
+                next[entry.key.toString()] = MemberAvailability.fromJson(raw);
               }
             }
           }
 
-          if (!mounted) return;
+          if (!mounted || _selectedGroup?.groupId != groupId) return;
           setState(() => _availability = next);
+          _scheduleAvailabilityExpiryRefresh();
         });
+  }
+
+  void _scheduleAvailabilityExpiryRefresh() {
+    _availabilityExpiryTimer?.cancel();
+    final now =
+        DateTime.now().millisecondsSinceEpoch ~/ Duration.millisecondsPerSecond;
+    final futureExpiries = _availability.values
+        .map((item) => item.staleAfterAt)
+        .whereType<int>()
+        .where((expiry) => expiry > now);
+    if (futureExpiries.isEmpty) return;
+
+    final nextExpiry = futureExpiries.reduce((a, b) => a < b ? a : b);
+    _availabilityExpiryTimer = Timer(
+      Duration(seconds: nextExpiry - now + 1),
+      () {
+        if (!mounted) return;
+        setState(() {});
+        _scheduleAvailabilityExpiryRefresh();
+      },
+    );
   }
 
   Future<void> _selectGroup(String groupId) async {
@@ -475,7 +500,12 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
       _heartbeatTimer = Timer.periodic(const Duration(seconds: 10), (_) {
         final activeSession = _onlineSession;
         if (activeSession != null) {
-          unawaited(_onlineRepository.heartbeat(activeSession));
+          unawaited(
+            _onlineRepository.heartbeat(
+              activeSession,
+              isTalking: _talkSession != null,
+            ),
+          );
         }
       });
 
@@ -856,13 +886,14 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
   }
 
   List<_CarouselItem> get _carouselItems {
+    final selfIsLive = _isOnline && (_state == 'live' || _state == 'talking');
     final selfAvailability = _isOnline
-        ? _Availability(
+        ? MemberAvailability(
             desiredState: 'online',
             effectiveState: _state,
-            canReceiveLiveAudio: true,
+            canReceiveLiveAudio: selfIsLive,
           )
-        : _Availability.away;
+        : MemberAvailability.away;
 
     return [
       for (final group in _groups)
@@ -873,7 +904,7 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
           profilePhotoBase64: _session.user.profilePhotoBase64,
           availability: group.groupId == _selectedGroup?.groupId
               ? selfAvailability
-              : _Availability.away,
+              : MemberAvailability.away,
         ),
     ];
   }
@@ -908,7 +939,7 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
                   onSetup: _openSetupWarnings,
                   hasSetupWarnings: warnings.isNotEmpty,
                   busy: _busy,
-                  online: _isOnline,
+                  online: live,
                   enabled: _serviceReady,
                   onTogglePresence: _togglePresence,
                 ),
@@ -962,7 +993,7 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
                 SizedBox(height: 18.h),
                 Text(
                   _isOnline
-                      ? 'hold to talk · release to let others speak'
+                      ? 'Tap to Talk'
                       : !_serviceReady
                       ? 'invite a friend to enable voice service'
                       : 'go online to start talking',
@@ -1196,10 +1227,11 @@ class _StatusToggle extends StatelessWidget {
                       ),
                       Expanded(
                         child: Center(
-                          child: Text(
-                            busy ? '…' : '🟢',
-                            style: TextStyle(fontSize: 11.sp),
-                          ),
+                          child: busy
+                              ? Text('…', style: TextStyle(fontSize: 11.sp))
+                              : online
+                              ? Text('🟢', style: TextStyle(fontSize: 11.sp))
+                              : const SizedBox.shrink(),
                         ),
                       ),
                     ],
@@ -1267,7 +1299,7 @@ class _FriendsStrip extends StatelessWidget {
   });
 
   final List<GroupMemberSummary> friends;
-  final Map<String, _Availability> availability;
+  final Map<String, MemberAvailability> availability;
   final VoidCallback? onInvite;
 
   @override
@@ -1298,7 +1330,7 @@ class _FriendsStrip extends StatelessWidget {
                 _FriendChip(
                   name: friend.displayName,
                   availability:
-                      availability[friend.userId] ?? _Availability.away,
+                      availability[friend.userId] ?? MemberAvailability.away,
                 ),
                 SizedBox(width: 12.w),
               ],
@@ -1315,7 +1347,7 @@ class _FriendChip extends StatelessWidget {
   const _FriendChip({required this.name, required this.availability});
 
   final String name;
-  final _Availability availability;
+  final MemberAvailability availability;
 
   @override
   Widget build(BuildContext context) {
@@ -1598,8 +1630,7 @@ class _MainAvatarCircle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final size = selected ? 158.w : 118.w;
-    final live = item.availability.isLive || talkActive;
+    final size = selected ? 124.w : 104.w;
 
     Widget circle = Container(
       width: size,
@@ -1608,17 +1639,8 @@ class _MainAvatarCircle extends StatelessWidget {
         shape: BoxShape.circle,
         border: Border.all(
           color: talkActive ? accent : Colors.white,
-          width: selected ? 3.5 : 2,
+          width: selected ? 2.5 : 2,
         ),
-        boxShadow: selected
-            ? [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.35),
-                  blurRadius: 24,
-                  offset: const Offset(0, 10),
-                ),
-              ]
-            : null,
       ),
       child: ClipOval(
         child: Stack(
@@ -1646,41 +1668,28 @@ class _MainAvatarCircle extends StatelessWidget {
     );
 
     if (talkEnabled) {
-      circle = Listener(
-        behavior: HitTestBehavior.opaque,
-        onPointerDown: talkBusy
-            ? null
-            : (_) {
-                unawaited(onTalkStart());
-              },
-        onPointerUp: (_) {
-          unawaited(onTalkStop());
-        },
-        onPointerCancel: (_) {
-          unawaited(onTalkStop());
-        },
-        child: circle,
+      circle = Semantics(
+        button: true,
+        label: talkActive ? 'Stop talking' : 'Tap to Talk',
+        child: GestureDetector(
+          onTap: talkBusy
+              ? null
+              : () {
+                  if (talkActive) {
+                    unawaited(onTalkStop());
+                  } else {
+                    unawaited(onTalkStart());
+                  }
+                },
+          child: circle,
+        ),
       );
     }
 
-    return Stack(
-      clipBehavior: Clip.none,
-      alignment: Alignment.center,
-      children: [
-        circle,
-        if (live && selected) ...[
-          Positioned(
-            top: -4,
-            right: 10,
-            child: Text('✨', style: TextStyle(fontSize: 22.sp)),
-          ),
-          Positioned(
-            top: 18,
-            right: -2,
-            child: Text('✨', style: TextStyle(fontSize: 16.sp)),
-          ),
-        ],
-      ],
+    return AnimatedOpacity(
+      duration: const Duration(milliseconds: 180),
+      opacity: talkBusy ? 0.65 : 1,
+      child: circle,
     );
   }
 }
@@ -1777,7 +1786,7 @@ class _CarouselItem {
     required String displayName,
     required String? profilePhotoUrl,
     required String? profilePhotoBase64,
-    required _Availability availability,
+    required MemberAvailability availability,
   }) {
     return _CarouselItem(
       group: group,
@@ -1790,7 +1799,7 @@ class _CarouselItem {
 
   final GroupSummary group;
   final String displayName;
-  final _Availability availability;
+  final MemberAvailability availability;
   final String? profilePhotoUrl;
   final String? profilePhotoBase64;
 }
@@ -1818,50 +1827,5 @@ class _SetupLine extends StatelessWidget {
         ],
       ),
     );
-  }
-}
-
-class _Availability {
-  const _Availability({
-    required this.desiredState,
-    required this.effectiveState,
-    required this.canReceiveLiveAudio,
-  });
-
-  static const _Availability away = _Availability(
-    desiredState: 'away',
-    effectiveState: 'away',
-    canReceiveLiveAudio: false,
-  );
-
-  final String desiredState;
-  final String effectiveState;
-  final bool canReceiveLiveAudio;
-
-  factory _Availability.fromJson(Map<Object?, Object?> data) {
-    return _Availability(
-      desiredState: data['desiredState']?.toString() ?? 'away',
-      effectiveState: data['effectiveState']?.toString() ?? 'away',
-      canReceiveLiveAudio: data['canReceiveLiveAudio'] == true,
-    );
-  }
-
-  bool get isLive {
-    return canReceiveLiveAudio ||
-        effectiveState == 'live' ||
-        effectiveState == 'talking' ||
-        effectiveState == 'connected';
-  }
-
-  String get label {
-    return switch (effectiveState) {
-      'talking' => 'Talking',
-      'live' => 'Live',
-      'connected' => 'Live',
-      'connecting' => 'Connecting',
-      'listening' => 'Listening',
-      'away' => 'Away',
-      _ => desiredState == 'online' ? 'Online' : 'Away',
-    };
   }
 }

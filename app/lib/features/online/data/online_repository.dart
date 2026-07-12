@@ -7,6 +7,7 @@ import '../../../core/network/api_client.dart';
 import '../../groups/models/group_summary.dart';
 import '../../identity/models/identity_session.dart';
 import '../models/livekit_token_response.dart';
+import '../models/member_availability.dart';
 import '../models/online_session.dart';
 
 class OnlineRepository {
@@ -91,6 +92,7 @@ class OnlineRepository {
 
   Future<void> markLive(OnlineSession session) async {
     final now = _nowSeconds();
+    await _scheduleAwayOnDisconnect(session);
     await _database.ref().update({
       'appServiceSessions/${session.serviceSessionId}/serviceState': 'running',
       'appServiceSessions/${session.serviceSessionId}/lastHeartbeatAt': now,
@@ -114,10 +116,24 @@ class OnlineRepository {
     });
   }
 
-  Future<void> heartbeat(OnlineSession session) async {
+  Future<void> heartbeat(
+    OnlineSession session, {
+    bool isTalking = false,
+  }) async {
     final now = _nowSeconds();
+    await _scheduleAwayOnDisconnect(session);
     await _database.ref().update({
       'appServiceSessions/${session.serviceSessionId}/lastHeartbeatAt': now,
+      'memberAvailability/${session.groupId}/${session.userId}/desiredState':
+          'online',
+      'memberAvailability/${session.groupId}/${session.userId}/effectiveState':
+          isTalking ? 'talking' : 'live',
+      'memberAvailability/${session.groupId}/${session.userId}/serviceState':
+          'running',
+      'memberAvailability/${session.groupId}/${session.userId}/livekitConnectionState':
+          'connected',
+      'memberAvailability/${session.groupId}/${session.userId}/canReceiveLiveAudio':
+          true,
       'memberAvailability/${session.groupId}/${session.userId}/lastHeartbeatAt':
           now,
       'memberAvailability/${session.groupId}/${session.userId}/staleAfterAt':
@@ -128,6 +144,10 @@ class OnlineRepository {
 
   Future<void> goAway(OnlineSession session) async {
     final now = _nowSeconds();
+    final availabilityRef = _database.ref(
+      'memberAvailability/${session.groupId}/${session.userId}',
+    );
+    await availabilityRef.onDisconnect().cancel();
 
     await _database.ref().update({
       'appServiceSessions/${session.serviceSessionId}/serviceState': 'stopped',
@@ -151,6 +171,25 @@ class OnlineRepository {
         'staleAfterAt': now,
         'updatedAt': now,
       },
+    });
+  }
+
+  Future<void> _scheduleAwayOnDisconnect(OnlineSession session) async {
+    final availabilityRef = _database.ref(
+      'memberAvailability/${session.groupId}/${session.userId}',
+    );
+    await availabilityRef.onDisconnect().set({
+      'activeDeviceId': null,
+      'activeServiceSessionId': null,
+      'activeLivekitSessionId': null,
+      'desiredState': MemberAvailability.away.desiredState,
+      'effectiveState': MemberAvailability.away.effectiveState,
+      'serviceState': 'stopped',
+      'livekitConnectionState': 'disconnected',
+      'canReceiveLiveAudio': false,
+      'lastHeartbeatAt': 0,
+      'staleAfterAt': 0,
+      'updatedAt': _nowSeconds(),
     });
   }
 
