@@ -48,6 +48,11 @@ class TalkFeedback {
     await HapticFeedback.heavyImpact();
   }
 
+  static Future<void> reactionReceived({required bool hapticsEnabled}) async {
+    if (!hapticsEnabled) return;
+    await HapticFeedback.selectionClick();
+  }
+
   static Future<void> _hapticStart() async {
     // mediumImpact is reliable on both iOS and Android; lightImpact is
     // often too subtle on Android OEMs.

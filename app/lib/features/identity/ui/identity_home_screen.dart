@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:livekit_client/livekit_client.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../../app/accent_theme.dart';
 import '../../../core/firebase/app_database.dart';
@@ -20,8 +21,11 @@ import '../../online/models/member_availability.dart';
 import '../../online/models/online_session.dart';
 import '../../talk/data/hand_raise_repository.dart';
 import '../../talk/data/talk_repository.dart';
+import '../../talk/models/in_call_reaction.dart';
 import '../../talk/models/talk_session.dart';
 import '../../talk/talk_feedback.dart';
+import '../../talk/ui/in_call_reaction_overlay.dart';
+import '../../talk/ui/in_call_reaction_sheet.dart';
 import '../data/identity_repository.dart';
 import '../models/identity_session.dart';
 import 'group_action_screen.dart';
@@ -77,10 +81,13 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
   bool _talkBusy = false;
   bool _talkPressed = false;
   bool _handRaiseBusy = false;
+  bool _reactionBusy = false;
   String _state = 'away';
   String? _message;
   ConnectionQuality _localConnectionQuality = ConnectionQuality.unknown;
   Map<String, ConnectionQuality> _remoteConnectionQualityByUserId = const {};
+  List<InCallReaction> _floatingReactions = const [];
+  final Map<String, Timer> _reactionDismissTimers = {};
 
   @override
   void initState() {
@@ -97,6 +104,7 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
     _membersSubscription?.cancel();
     _handRaiseSubscription?.cancel();
     _heartbeatTimer?.cancel();
+    _clearFloatingReactions();
     final activeTalk = _talkSession;
     if (activeTalk != null) {
       unawaited(_talkRepository.stopTalk(activeTalk, reason: 'screen_closed'));
@@ -608,6 +616,7 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
         _onlineSession = null;
         _talkSession = null;
         _speakingUserIds = const {};
+        _floatingReactions = const [];
         _state = 'away';
         _message = LiveKitStatus.away;
       });
@@ -745,6 +754,114 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
     } finally {
       if (mounted) setState(() => _handRaiseBusy = false);
     }
+  }
+
+  bool get _someoneElseTalking {
+    return _friends.any((friend) {
+      final availability = _availability[friend.userId];
+      return availability?.isTalking == true ||
+          _speakingUserIds.contains(friend.userId);
+    });
+  }
+
+  /// Listeners can drop emoji/short text while someone else holds the mic.
+  bool get _canSendInCallReaction {
+    return _isOnline &&
+        _room?.localParticipant != null &&
+        _talkSession == null &&
+        _someoneElseTalking;
+  }
+
+  Future<void> _openReactionComposer() async {
+    if (!_canSendInCallReaction || _reactionBusy) return;
+
+    final text = await showInCallReactionSheet(context);
+    if (!mounted || text == null) return;
+    await _sendInCallReaction(text);
+  }
+
+  Future<void> _sendInCallReaction(String rawText) async {
+    final text = InCallReaction.sanitizeInput(rawText);
+    final participant = _room?.localParticipant;
+    if (text == null || participant == null || _reactionBusy) return;
+
+    final reaction = InCallReaction(
+      id: const Uuid().v4(),
+      userId: _session.userId,
+      displayName: _session.user.displayName,
+      text: text,
+      sentAtMs: DateTime.now().millisecondsSinceEpoch,
+    );
+
+    setState(() => _reactionBusy = true);
+    try {
+      await participant.publishData(
+        reaction.encode(),
+        reliable: true,
+        topic: InCallReaction.topic,
+      );
+      _showFloatingReaction(reaction);
+      unawaited(
+        TalkFeedback.reactionReceived(
+          hapticsEnabled: _session.settings.hapticsEnabled,
+        ),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _message = 'Couldn’t send reaction.');
+    } finally {
+      if (mounted) setState(() => _reactionBusy = false);
+    }
+  }
+
+  void _onDataReceived(DataReceivedEvent event) {
+    if (event.topic != null && event.topic != InCallReaction.topic) return;
+    final reaction = InCallReaction.tryParse(event.data);
+    if (reaction == null) return;
+    if (reaction.userId == _session.userId) return;
+    _showFloatingReaction(reaction);
+    unawaited(
+      TalkFeedback.reactionReceived(
+        hapticsEnabled: _session.settings.hapticsEnabled,
+      ),
+    );
+  }
+
+  void _showFloatingReaction(InCallReaction reaction) {
+    if (!mounted) return;
+
+    _reactionDismissTimers.remove(reaction.id)?.cancel();
+    setState(() {
+      final next = [
+        ..._floatingReactions.where((item) => item.id != reaction.id),
+        reaction,
+      ];
+      // Keep the stack small so the center of the screen stays readable.
+      _floatingReactions = next.length <= 3
+          ? next
+          : next.sublist(next.length - 3);
+    });
+
+    _reactionDismissTimers[reaction.id] = Timer(
+      const Duration(milliseconds: 2900),
+      () {
+        _reactionDismissTimers.remove(reaction.id);
+        if (!mounted) return;
+        setState(() {
+          _floatingReactions = _floatingReactions
+              .where((item) => item.id != reaction.id)
+              .toList(growable: false);
+        });
+      },
+    );
+  }
+
+  void _clearFloatingReactions() {
+    for (final timer in _reactionDismissTimers.values) {
+      timer.cancel();
+    }
+    _reactionDismissTimers.clear();
+    _floatingReactions = const [];
   }
 
   Future<void> _connectLiveKit(OnlineSession session) async {
@@ -921,7 +1038,8 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
             _message = LiveKitStatus.receivingVoice;
           }
         });
-      });
+      })
+      ..on<DataReceivedEvent>(_onDataReceived);
   }
 
   Future<void> _disconnectLiveKit() async {
@@ -930,6 +1048,7 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
     _roomListener?.dispose();
     _roomListener = null;
     _speakingUserIds = const {};
+    _clearFloatingReactions();
     _clearConnectionQualities();
 
     try {
@@ -1185,6 +1304,9 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
                     handRaised: _handRaises[_session.userId] == true,
                     handRaiseBusy: _handRaiseBusy,
                     onHandRaise: _toggleHandRaise,
+                    showReaction: _canSendInCallReaction,
+                    reactionBusy: _reactionBusy,
+                    onReaction: _openReactionComposer,
                     groupName: focusedGroup.name,
                     onTapName: _groups.length > 1 ? _openGroupPicker : null,
                   ),
@@ -1232,6 +1354,8 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
               ],
             ),
           ),
+          if (_floatingReactions.isNotEmpty)
+            InCallReactionOverlay(reactions: _floatingReactions),
           if (_loadingGroups)
             const ColoredBox(
               color: Color(0x88000000),
@@ -1901,6 +2025,9 @@ class _CarouselCaption extends StatelessWidget {
     required this.handRaised,
     required this.handRaiseBusy,
     required this.onHandRaise,
+    required this.showReaction,
+    required this.reactionBusy,
+    required this.onReaction,
     required this.groupName,
     required this.onTapName,
   });
@@ -1911,6 +2038,9 @@ class _CarouselCaption extends StatelessWidget {
   final bool handRaised;
   final bool handRaiseBusy;
   final VoidCallback onHandRaise;
+  final bool showReaction;
+  final bool reactionBusy;
+  final VoidCallback onReaction;
   final String? groupName;
   final VoidCallback? onTapName;
 
@@ -2008,6 +2138,32 @@ class _CarouselCaption extends StatelessWidget {
                 ),
               ),
             ),
+            if (showReaction) ...[
+              SizedBox(width: 8.w),
+              Opacity(
+                opacity: reactionBusy ? 0.55 : 1,
+                child: Tooltip(
+                  message: 'Send a reaction',
+                  child: Material(
+                    color: const Color.fromRGBO(255, 255, 255, 0.14),
+                    shape: const CircleBorder(),
+                    child: InkWell(
+                      onTap: reactionBusy ? null : onReaction,
+                      customBorder: const CircleBorder(),
+                      child: SizedBox(
+                        width: 38.w,
+                        height: 38.w,
+                        child: Icon(
+                          Icons.keyboard_rounded,
+                          color: Colors.white,
+                          size: 20.sp,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ],
         ),
       ],
@@ -2081,13 +2237,13 @@ class _ExperienceCarousel extends StatelessWidget {
     if (items.isEmpty) {
       return Row(
         children: [
-          const Spacer(),
+          SizedBox(width: 16.w),
           _DashedAddCircle(
             onTap: onJoinGroup,
             compact: true,
             label: '+ join\ngroup',
           ),
-          SizedBox(width: 12.w),
+          const Spacer(),
           _DashedAddCircle(
             onTap: onCreateGroup,
             compact: true,
@@ -2102,7 +2258,13 @@ class _ExperienceCarousel extends StatelessWidget {
 
     return Row(
       children: [
-        SizedBox(width: 20.w),
+        SizedBox(width: 16.w),
+        _DashedAddCircle(
+          onTap: onJoinGroup,
+          compact: true,
+          label: '+ join\ngroup',
+        ),
+        SizedBox(width: 12.w),
         Expanded(
           child: PageView.builder(
             controller: controller,
@@ -2165,11 +2327,6 @@ class _ExperienceCarousel extends StatelessWidget {
             },
           ),
         ),
-        _DashedAddCircle(
-          onTap: onJoinGroup,
-          compact: true,
-          label: '+ join\ngroup',
-        ),
         SizedBox(width: 12.w),
         _DashedAddCircle(
           onTap: onCreateGroup,
@@ -2227,35 +2384,14 @@ class _MainAvatarCircle extends StatelessWidget {
               fallbackPhotoBase64: item.profilePhotoBase64,
               tileSize: size,
             ),
-            if (talkActive)
-              ColoredBox(
-                color: accent.withValues(alpha: 0.28),
-                child: Icon(Icons.mic, color: Colors.white, size: size * 0.28),
-              ),
-            // Small persistent mic badge so the circle reads as a "tap to
-            // talk" control at a glance, even before/after an active call.
             Align(
               alignment: Alignment.bottomCenter,
               child: Padding(
-                padding: EdgeInsets.only(bottom: size * 0.06),
-                child: Container(
-                  width: size * 0.26,
-                  height: size * 0.26,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: talkActive
-                        ? accent
-                        : const Color.fromRGBO(0, 0, 0, 0.55),
-                    border: Border.all(
-                      color: Colors.white,
-                      width: 1.4,
-                    ),
-                  ),
-                  child: Icon(
-                    Icons.mic,
-                    color: Colors.white,
-                    size: size * 0.15,
-                  ),
+                padding: EdgeInsets.only(bottom: size * 0.08),
+                child: Icon(
+                  Icons.mic,
+                  color: Colors.white,
+                  size: talkActive ? size * 0.22 : size * 0.18,
                 ),
               ),
             ),
