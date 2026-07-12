@@ -90,10 +90,25 @@ class _ProfilePictureScreenState extends State<ProfilePictureScreen> {
       await widget.onComplete(updatedSession);
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(error.toString())),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
       setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _skipPhoto() async {
+    if (_saving) return;
+    setState(() => _saving = true);
+
+    try {
+      await widget.onComplete(widget.session);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
     }
   }
 
@@ -108,11 +123,11 @@ class _ProfilePictureScreenState extends State<ProfilePictureScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: _hasSelectedPhoto ? Colors.black : const Color(0xff000000),
+      backgroundColor: _hasSelectedPhoto
+          ? Colors.black
+          : const Color(0xff000000),
       body: SafeArea(
-        child: _hasSelectedPhoto
-            ? _buildPreviewStage()
-            : _buildPickerStage(),
+        child: _hasSelectedPhoto ? _buildPreviewStage() : _buildPickerStage(),
       ),
     );
   }
@@ -159,10 +174,7 @@ class _ProfilePictureScreenState extends State<ProfilePictureScreen> {
                               shape: BoxShape.circle,
                               color: Color(0xff123a5e),
                             ),
-                            child: const Icon(
-                              Icons.add,
-                              color: Colors.white,
-                            ),
+                            child: const Icon(Icons.add, color: Colors.white),
                           ),
                         ),
                         SizedBox(width: 14.w),
@@ -239,7 +251,19 @@ class _ProfilePictureScreenState extends State<ProfilePictureScreen> {
               ),
             ),
           ),
-          SizedBox(height: 34.h),
+          SizedBox(height: 10.h),
+          TextButton(
+            onPressed: _saving ? null : _skipPhoto,
+            child: Text(
+              'skip for now',
+              style: TextStyle(
+                color: Colors.white70,
+                fontSize: 15.sp,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          SizedBox(height: 18.h),
         ],
       ),
     );
@@ -309,7 +333,9 @@ class _ProfilePictureScreenState extends State<ProfilePictureScreen> {
                     width: 250.w,
                     height: 52.h,
                     child: ElevatedButton(
-                      onPressed: _saving ? null : () => widget.onComplete(widget.session),
+                      onPressed: _saving
+                          ? null
+                          : () => widget.onComplete(widget.session),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.white,
                         foregroundColor: const Color(0xff384047),
@@ -329,21 +355,47 @@ class _ProfilePictureScreenState extends State<ProfilePictureScreen> {
                     ),
                   ),
                 SizedBox(height: 18.h),
-                TextButton(
-                  onPressed: _saving
-                      ? null
-                      : imageBytes != null
-                      ? _cancelSelection
-                      : _pickImage,
-                  child: Text(
-                    imageBytes != null ? 'cancel' : 'change photo',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 16.sp,
-                      fontWeight: FontWeight.w600,
+                if (imageBytes != null)
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      TextButton(
+                        onPressed: _saving ? null : _cancelSelection,
+                        child: Text(
+                          'cancel',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 16.sp,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      SizedBox(width: 12.w),
+                      TextButton(
+                        onPressed: _saving ? null : _skipPhoto,
+                        child: Text(
+                          'skip for now',
+                          style: TextStyle(
+                            color: Colors.white70,
+                            fontSize: 16.sp,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ],
+                  )
+                else
+                  TextButton(
+                    onPressed: _saving ? null : _pickImage,
+                    child: Text(
+                      'change photo',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 16.sp,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
-                ),
               ],
             ),
           ),

@@ -40,15 +40,9 @@ class ProfilePhotoStorage {
     );
     request.fields['upload_preset'] = uploadPreset;
     request.fields['folder'] = AppConfig.cloudinaryProfileFolder;
-    request.fields['public_id'] = userId;
-    request.fields['overwrite'] = 'true';
-    request.fields['unique_filename'] = 'false';
+    request.fields['context'] = 'user_id=$userId';
     request.files.add(
-      http.MultipartFile.fromBytes(
-        'file',
-        imageBytes,
-        filename: 'profile.jpg',
-      ),
+      http.MultipartFile.fromBytes('file', imageBytes, filename: 'profile.jpg'),
     );
 
     final streamedResponse = await _httpClient.send(request);
