@@ -5,7 +5,6 @@ import '../identity/models/identity_session.dart';
 import '../identity/ui/identity_home_screen.dart';
 import '../identity/ui/no_groups_screen.dart';
 import 'data/group_repository.dart';
-import 'ui/waiting_for_group_members_screen.dart';
 
 Future<Widget> resolveGroupEntryScreen({
   required IdentitySession session,
@@ -27,12 +26,8 @@ Future<Widget> resolveGroupEntryScreen({
         identityRepository: identityRepository,
       );
     case GroupEntryKind.waiting:
-      final group = resolution.group!;
-      final invite = await repository.createInvite(group.groupId);
-      return WaitingForGroupMembersScreen(
-        group: group,
-        invite: invite,
-        session: session,
+      return IdentityHomeScreen(
+        initialSession: session,
         identityRepository: identityRepository,
       );
   }

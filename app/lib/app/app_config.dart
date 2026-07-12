@@ -12,12 +12,12 @@ class AppConfig {
 
   static const String cloudinaryCloudName = String.fromEnvironment(
     'ONE_ONE_CLOUDINARY_CLOUD_NAME',
-    defaultValue: '',
+    defaultValue: 'dfmdfwxlu',
   );
 
   static const String cloudinaryUploadPreset = String.fromEnvironment(
     'ONE_ONE_CLOUDINARY_UPLOAD_PRESET',
-    defaultValue: '',
+    defaultValue: 'one-one',
   );
 
   static const String cloudinaryProfileFolder = 'one_one/profile_photos';

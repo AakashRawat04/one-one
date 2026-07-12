@@ -14,6 +14,7 @@ import 'battery_optimization_screen.dart';
 import 'display_name_screen.dart';
 import 'profile_picture_screen.dart';
 import 'setup_permission_screen.dart';
+import 'startup_session_policy.dart';
 
 class StartupGateScreen extends StatefulWidget {
   const StartupGateScreen({super.key});
@@ -53,10 +54,15 @@ class _StartupGateScreenState extends State<StartupGateScreen> {
 
     _isExistingUser = authUser != null;
 
-    _introTimer = Timer(_introDelay, () {
+    _introTimer = Timer(_introDelay, () async {
       if (!mounted) return;
 
-      if (_isExistingUser) {
+      final shouldResume = StartupSessionPolicy.shouldResume(
+        hadInitialFirebaseUser: _isExistingUser,
+        hasCurrentFirebaseUser: FirebaseAuth.instance.currentUser != null,
+      );
+
+      if (shouldResume) {
         unawaited(_continueAfterLogin());
       } else {
         setState(() => _showLetsGo = true);
@@ -193,7 +199,9 @@ class _StartupGateScreenState extends State<StartupGateScreen> {
                           width: 260.w,
                           height: 52.h,
                           child: ElevatedButton(
-                            onPressed: _isLoggingIn ? null : _continueAfterLogin,
+                            onPressed: _isLoggingIn
+                                ? null
+                                : _continueAfterLogin,
                             style: ElevatedButton.styleFrom(
                               backgroundColor: Colors.white,
                               foregroundColor: const Color(0xff384047),
@@ -251,8 +259,12 @@ class _StartupGateScreenState extends State<StartupGateScreen> {
                               fontSize: 11.sp,
                               height: 1.25,
                               decoration: TextDecoration.underline,
-                              decorationColor:
-                                  const Color.fromRGBO(56, 64, 71, 0.78),
+                              decorationColor: const Color.fromRGBO(
+                                56,
+                                64,
+                                71,
+                                0.78,
+                              ),
                             ),
                           ),
                         ],
@@ -317,9 +329,7 @@ class _GroupEntryBootstrapState extends State<_GroupEntryBootstrap> {
     if (screen == null) {
       return const Scaffold(
         backgroundColor: Color(0xff000000),
-        body: Center(
-          child: CircularProgressIndicator(color: Colors.white),
-        ),
+        body: Center(child: CircularProgressIndicator(color: Colors.white)),
       );
     }
 

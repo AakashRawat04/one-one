@@ -10,10 +10,10 @@ import 'package:livekit_client/livekit_client.dart';
 import '../../../app/accent_theme.dart';
 import '../../../core/firebase/app_database.dart';
 import '../../groups/data/group_repository.dart';
+import '../../groups/group_service_readiness.dart';
 import '../../groups/models/group_invite_result.dart';
 import '../../groups/models/group_member_summary.dart';
 import '../../groups/models/group_summary.dart';
-import '../../groups/ui/waiting_for_group_members_screen.dart';
 import '../../online/data/online_repository.dart';
 import '../../online/models/online_session.dart';
 import '../../talk/data/talk_repository.dart';
@@ -50,6 +50,7 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
   Map<String, _Availability> _availability = const {};
   GroupSummary? _selectedGroup;
   StreamSubscription<DatabaseEvent>? _availabilitySubscription;
+  StreamSubscription<DatabaseEvent>? _membersSubscription;
 
   OnlineSession? _onlineSession;
   TalkSession? _talkSession;
@@ -80,6 +81,7 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
   void dispose() {
     _carouselController.dispose();
     _availabilitySubscription?.cancel();
+    _membersSubscription?.cancel();
     _heartbeatTimer?.cancel();
     final activeTalk = _talkSession;
     if (activeTalk != null) {
@@ -92,10 +94,12 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
   Future<void> _loadGroups() async {
     setState(() => _loadingGroups = true);
     try {
-      final resolution = await _groupRepository.resolveGroupEntry(_session.userId);
+      final resolution = await _groupRepository.resolveGroupEntry(
+        _session.userId,
+      );
       if (!mounted) return;
 
-      if (resolution.kind != GroupEntryKind.home &&
+      if (resolution.kind == GroupEntryKind.noGroups &&
           (ModalRoute.of(context)?.isCurrent ?? true)) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (!mounted) return;
@@ -130,6 +134,7 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
 
       if (selected != null) {
         await _loadMembers(selected.groupId);
+        _listenToMembers(selected.groupId);
         _listenToAvailability(selected.groupId);
       }
     } catch (error) {
@@ -154,19 +159,7 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
           ),
         );
       case GroupEntryKind.waiting:
-        final group = resolution.group!;
-        final invite = await _groupRepository.createInvite(group.groupId);
-        if (!mounted) return;
-        await Navigator.of(context).pushReplacement(
-          MaterialPageRoute<void>(
-            builder: (_) => WaitingForGroupMembersScreen(
-              group: group,
-              invite: invite,
-              session: _session,
-              identityRepository: widget.identityRepository,
-            ),
-          ),
-        );
+        break;
       case GroupEntryKind.home:
         break;
     }
@@ -174,8 +167,16 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
 
   Future<void> _loadMembers(String groupId) async {
     final members = await _groupRepository.loadGroupMembers(groupId);
-    if (!mounted) return;
+    if (!mounted || _selectedGroup?.groupId != groupId) return;
     setState(() => _members = members);
+  }
+
+  void _listenToMembers(String groupId) {
+    unawaited(_membersSubscription?.cancel());
+    _membersSubscription = AppDatabase.instance()
+        .ref('groupMembers/$groupId')
+        .onValue
+        .listen((_) => unawaited(_loadMembers(groupId)));
   }
 
   void _listenToAvailability(String groupId) {
@@ -209,6 +210,7 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
       _availability = const {};
     });
     await _loadMembers(group.groupId);
+    _listenToMembers(group.groupId);
     _listenToAvailability(group.groupId);
   }
 
@@ -230,7 +232,9 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
   void _syncCarouselToSelectedGroup() {
     final selected = _selectedGroup;
     if (selected == null || _groups.isEmpty) return;
-    final index = _groups.indexWhere((group) => group.groupId == selected.groupId);
+    final index = _groups.indexWhere(
+      (group) => group.groupId == selected.groupId,
+    );
     if (index < 0) return;
 
     _carouselIndex = index;
@@ -255,12 +259,13 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
           );
         },
         transitionsBuilder: (context, animation, secondaryAnimation, child) {
-          final offset = Tween<Offset>(
-            begin: const Offset(0, 1),
-            end: Offset.zero,
-          ).animate(
-            CurvedAnimation(parent: animation, curve: Curves.easeOutCubic),
-          );
+          final offset =
+              Tween<Offset>(
+                begin: const Offset(0, 1),
+                end: Offset.zero,
+              ).animate(
+                CurvedAnimation(parent: animation, curve: Curves.easeOutCubic),
+              );
           return SlideTransition(position: offset, child: child);
         },
       ),
@@ -305,10 +310,7 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
                 Text(
                   'Share this group PIN so they can join',
                   textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Colors.white70,
-                    fontSize: 14.sp,
-                  ),
+                  style: TextStyle(color: Colors.white70, fontSize: 14.sp),
                 ),
                 SizedBox(height: 20.h),
                 GestureDetector(
@@ -319,9 +321,9 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
                     if (!context.mounted) return;
                     Navigator.of(context).pop();
                     if (!mounted) return;
-                    ScaffoldMessenger.of(this.context).showSnackBar(
-                      const SnackBar(content: Text('PIN copied')),
-                    );
+                    ScaffoldMessenger.of(
+                      this.context,
+                    ).showSnackBar(const SnackBar(content: Text('PIN copied')));
                   },
                   child: Container(
                     width: double.infinity,
@@ -433,6 +435,10 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
 
   void _togglePresence() {
     if (_busy) return;
+    if (!_serviceReady) {
+      setState(() => _message = 'Invite a friend to enable voice service.');
+      return;
+    }
     if (_isOnline) {
       unawaited(_goAway());
     } else {
@@ -444,6 +450,10 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
     final group = _selectedGroup;
     if (group == null) {
       setState(() => _message = 'Create or join a group first.');
+      return;
+    }
+    if (!_serviceReady) {
+      setState(() => _message = 'Invite a friend to enable voice service.');
       return;
     }
 
@@ -836,6 +846,9 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
 
   bool get _isOnline => _onlineSession != null;
 
+  bool get _serviceReady =>
+      groupHasServicePeer(members: _members, currentUserId: _session.userId);
+
   List<GroupMemberSummary> get _friends {
     return _members
         .where((member) => member.userId != _session.userId)
@@ -896,6 +909,7 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
                   hasSetupWarnings: warnings.isNotEmpty,
                   busy: _busy,
                   online: _isOnline,
+                  enabled: _serviceReady,
                   onTogglePresence: _togglePresence,
                 ),
                 SizedBox(height: 8.h),
@@ -913,10 +927,7 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
                       textAlign: TextAlign.center,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: Colors.white70,
-                        fontSize: 12.sp,
-                      ),
+                      style: TextStyle(color: Colors.white70, fontSize: 12.sp),
                     ),
                   ),
                 ],
@@ -952,6 +963,8 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
                 Text(
                   _isOnline
                       ? 'hold to talk · release to let others speak'
+                      : !_serviceReady
+                      ? 'invite a friend to enable voice service'
                       : 'go online to start talking',
                   style: TextStyle(
                     color: const Color.fromRGBO(255, 255, 255, 0.55),
@@ -989,7 +1002,8 @@ class _HomeBackdrop extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final hasPhoto = (profilePhotoUrl?.trim().isNotEmpty ?? false) ||
+    final hasPhoto =
+        (profilePhotoUrl?.trim().isNotEmpty ?? false) ||
         (profilePhotoBase64?.trim().isNotEmpty ?? false);
 
     return Stack(
@@ -1043,6 +1057,7 @@ class _TopChrome extends StatelessWidget {
     required this.hasSetupWarnings,
     required this.busy,
     required this.online,
+    required this.enabled,
     required this.onTogglePresence,
   });
 
@@ -1051,6 +1066,7 @@ class _TopChrome extends StatelessWidget {
   final bool hasSetupWarnings;
   final bool busy;
   final bool online;
+  final bool enabled;
   final VoidCallback onTogglePresence;
 
   @override
@@ -1059,48 +1075,54 @@ class _TopChrome extends StatelessWidget {
       padding: EdgeInsets.fromLTRB(12.w, 4.h, 12.w, 0),
       child: SizedBox(
         height: 52.h,
-        child: Row(
+        child: Stack(
+          alignment: Alignment.center,
           children: [
-            Stack(
-              clipBehavior: Clip.none,
-              children: [
-                _GlassIconButton(
-                  tooltip: hasSetupWarnings ? 'Settings / Setup' : 'Settings',
-                  icon: Icons.settings_outlined,
-                  onPressed: onSettings,
-                  onLongPress: onSetup,
-                ),
-                if (hasSetupWarnings)
-                  Positioned(
-                    top: -2,
-                    right: -2,
-                    child: GestureDetector(
-                      onTap: onSetup,
-                      child: Container(
-                        width: 14.w,
-                        height: 14.w,
-                        decoration: const BoxDecoration(
-                          color: Color(0xffff5a5f),
-                          shape: BoxShape.circle,
+            Center(
+              child: Image.asset(
+                'assets/logo.png',
+                height: 44.h,
+                fit: BoxFit.contain,
+              ),
+            ),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  _GlassIconButton(
+                    tooltip: hasSetupWarnings ? 'Settings / Setup' : 'Settings',
+                    icon: Icons.settings_outlined,
+                    onPressed: onSettings,
+                    onLongPress: onSetup,
+                  ),
+                  if (hasSetupWarnings)
+                    Positioned(
+                      top: -2,
+                      right: -2,
+                      child: GestureDetector(
+                        onTap: onSetup,
+                        child: Container(
+                          width: 14.w,
+                          height: 14.w,
+                          decoration: const BoxDecoration(
+                            color: Color(0xffff5a5f),
+                            shape: BoxShape.circle,
+                          ),
                         ),
                       ),
                     ),
-                  ),
-              ],
-            ),
-            Expanded(
-              child: Center(
-                child: Image.asset(
-                  'assets/logo.png',
-                  height: 44.h,
-                  fit: BoxFit.contain,
-                ),
+                ],
               ),
             ),
-            _StatusToggle(
-              busy: busy,
-              online: online,
-              onToggle: onTogglePresence,
+            Align(
+              alignment: Alignment.centerRight,
+              child: _StatusToggle(
+                busy: busy,
+                online: online,
+                enabled: enabled,
+                onToggle: onTogglePresence,
+              ),
             ),
           ],
         ),
@@ -1113,24 +1135,30 @@ class _StatusToggle extends StatelessWidget {
   const _StatusToggle({
     required this.busy,
     required this.online,
+    required this.enabled,
     required this.onToggle,
   });
 
   final bool busy;
   final bool online;
+  final bool enabled;
   final VoidCallback onToggle;
 
   @override
   Widget build(BuildContext context) {
     return Opacity(
-      opacity: busy ? 0.65 : 1,
+      opacity: busy || !enabled ? 0.55 : 1,
       child: Tooltip(
-        message: online ? 'Tap to go away' : 'Tap to go online',
+        message: !enabled
+            ? 'Available after another member joins'
+            : online
+            ? 'Tap to go away'
+            : 'Tap to go online',
         child: Material(
           color: const Color.fromRGBO(255, 255, 255, 0.12),
           borderRadius: BorderRadius.circular(18.r),
           child: InkWell(
-            onTap: busy ? null : onToggle,
+            onTap: busy || !enabled ? null : onToggle,
             borderRadius: BorderRadius.circular(18.r),
             child: Container(
               width: 72.w,
@@ -1147,8 +1175,9 @@ class _StatusToggle extends StatelessWidget {
                   AnimatedAlign(
                     duration: const Duration(milliseconds: 220),
                     curve: Curves.easeOutCubic,
-                    alignment:
-                        online ? Alignment.centerRight : Alignment.centerLeft,
+                    alignment: online
+                        ? Alignment.centerRight
+                        : Alignment.centerLeft,
                     child: Container(
                       width: 34.w,
                       height: double.infinity,
@@ -1162,10 +1191,7 @@ class _StatusToggle extends StatelessWidget {
                     children: [
                       Expanded(
                         child: Center(
-                          child: Text(
-                            '🌙',
-                            style: TextStyle(fontSize: 11.sp),
-                          ),
+                          child: Text('🌙', style: TextStyle(fontSize: 11.sp)),
                         ),
                       ),
                       Expanded(
@@ -1327,7 +1353,10 @@ class _FriendChip extends StatelessWidget {
             Positioned(
               right: -4,
               bottom: -2,
-              child: Text(live ? '🟢' : '🌙', style: TextStyle(fontSize: 14.sp)),
+              child: Text(
+                live ? '🟢' : '🌙',
+                style: TextStyle(fontSize: 14.sp),
+              ),
             ),
           ],
         ),
@@ -1370,10 +1399,7 @@ class _AddFriendChip extends StatelessWidget {
               alignment: Alignment.center,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                border: Border.all(
-                  color: Colors.white54,
-                  width: 1.5,
-                ),
+                border: Border.all(color: Colors.white54, width: 1.5),
               ),
               child: Icon(Icons.add, color: Colors.white, size: 24.sp),
             ),
@@ -1612,11 +1638,7 @@ class _MainAvatarCircle extends StatelessWidget {
             if (talkActive)
               ColoredBox(
                 color: accent.withValues(alpha: 0.28),
-                child: Icon(
-                  Icons.mic,
-                  color: Colors.white,
-                  size: size * 0.28,
-                ),
+                child: Icon(Icons.mic, color: Colors.white, size: size * 0.28),
               ),
           ],
         ),
@@ -1664,10 +1686,7 @@ class _MainAvatarCircle extends StatelessWidget {
 }
 
 class _DashedAddCircle extends StatelessWidget {
-  const _DashedAddCircle({
-    required this.onTap,
-    required this.compact,
-  });
+  const _DashedAddCircle({required this.onTap, required this.compact});
 
   final VoidCallback? onTap;
   final bool compact;
