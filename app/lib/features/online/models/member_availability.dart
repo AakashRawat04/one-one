@@ -30,6 +30,11 @@ class MemberAvailability {
     DateTime.now().millisecondsSinceEpoch ~/ Duration.millisecondsPerSecond,
   );
 
+  bool get isTalking {
+    if (!isLive) return false;
+    return effectiveState == 'talking';
+  }
+
   bool isLiveAt(int epochSeconds) {
     final expiresAt = staleAfterAt;
     if (expiresAt != null && expiresAt <= epochSeconds) return false;

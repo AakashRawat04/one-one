@@ -8,6 +8,7 @@ import '../../identity/models/identity_session.dart';
 import '../../talk/data/talk_repository.dart';
 import '../../talk/models/talk_session.dart';
 import '../data/online_repository.dart';
+import '../livekit_status.dart';
 import '../models/online_session.dart';
 
 class OnlineScreen extends StatefulWidget {
@@ -80,7 +81,7 @@ class _OnlineScreenState extends State<OnlineScreen> {
       setState(() {
         _session = createdSession;
         _state = 'live';
-        _message = 'Live';
+        _message = LiveKitStatus.live;
       });
     } catch (error) {
       await _disconnectLiveKit();
@@ -94,7 +95,7 @@ class _OnlineScreenState extends State<OnlineScreen> {
       if (!mounted) return;
       setState(() {
         _state = 'away';
-        _message = error.toString();
+        _message = LiveKitStatus.sanitizeError(error);
       });
     } finally {
       if (mounted) {
@@ -128,10 +129,10 @@ class _OnlineScreenState extends State<OnlineScreen> {
         _session = null;
         _talkSession = null;
         _state = 'away';
-        _message = 'Away';
+        _message = LiveKitStatus.away;
       });
     } catch (error) {
-      setState(() => _message = error.toString());
+      setState(() => _message = LiveKitStatus.sanitizeError(error));
     } finally {
       if (mounted) {
         setState(() => _busy = false);
@@ -156,7 +157,7 @@ class _OnlineScreenState extends State<OnlineScreen> {
       setState(() {
         _talkSession = startedTalk;
         _state = 'talking';
-        _message = 'Talking';
+        _message = LiveKitStatus.talking;
       });
     } catch (error) {
       if (startedTalk != null) {
@@ -166,7 +167,7 @@ class _OnlineScreenState extends State<OnlineScreen> {
       setState(() {
         _talkSession = null;
         _state = _session == null ? 'away' : 'live';
-        _message = error.toString();
+        _message = LiveKitStatus.sanitizeError(error);
       });
     } finally {
       if (mounted) {
@@ -190,7 +191,7 @@ class _OnlineScreenState extends State<OnlineScreen> {
     } catch (error) {
       if (!mounted) return;
       setState(() {
-        _message = 'Talk stop failed: $error';
+        _message = 'Couldn’t stop talking. Try again.';
       });
     }
   }
@@ -211,7 +212,7 @@ class _OnlineScreenState extends State<OnlineScreen> {
 
     setState(() {
       _state = 'connecting';
-      _message = 'Connecting to LiveKit';
+      _message = LiveKitStatus.connecting;
     });
 
     await room
@@ -241,37 +242,28 @@ class _OnlineScreenState extends State<OnlineScreen> {
   void _attachRoomListener(Room room) {
     _roomListener = room.createListener()
       ..on<RoomConnectedEvent>((_) {
-        _setMessage('LiveKit connected');
+        _setMessage(LiveKitStatus.connected);
       })
       ..on<RoomReconnectingEvent>((_) {
-        _setStateAndMessage('reconnecting', 'LiveKit reconnecting');
+        _setStateAndMessage('reconnecting', LiveKitStatus.reconnecting);
       })
       ..on<RoomReconnectedEvent>((_) {
-        _setStateAndMessage('live', 'LiveKit reconnected');
+        _setStateAndMessage('live', LiveKitStatus.connected);
       })
       ..on<RoomDisconnectedEvent>((event) {
         _setStateAndMessage(
           'disconnected',
-          'LiveKit disconnected: ${event.reason}',
+          LiveKitStatus.fromDisconnectReason(event.reason),
         );
       })
-      ..on<ParticipantConnectedEvent>((event) {
-        _setMessage('${event.participant.identity} joined');
-      })
-      ..on<TrackSubscribedEvent>((event) {
-        final isAudio = event.track is RemoteAudioTrack;
-        _setMessage(
-          isAudio
-              ? 'Audio subscribed from ${event.participant.identity}'
-              : 'Track subscribed from ${event.participant.identity}',
-        );
-      })
+      ..on<ParticipantConnectedEvent>((_) {})
+      ..on<TrackSubscribedEvent>((_) {})
       ..on<ActiveSpeakersChangedEvent>((event) {
         final remoteSpeakers = event.speakers.where(
           (speaker) => speaker.identity != room.localParticipant?.identity,
         );
         if (remoteSpeakers.isNotEmpty) {
-          _setMessage('Receiving voice');
+          _setMessage(LiveKitStatus.receivingVoice);
         }
       });
   }

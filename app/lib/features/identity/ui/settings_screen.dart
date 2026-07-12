@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../../app/accent_theme.dart';
@@ -18,6 +21,53 @@ class SettingsScreen extends StatefulWidget {
   final IdentitySession session;
   final IdentityRepository identityRepository;
   final ValueChanged<IdentitySession> onSessionChanged;
+
+  /// Opens settings with a dark fade/slide transition (no white flash).
+  static Future<void> open(
+    BuildContext context, {
+    required IdentitySession session,
+    required IdentityRepository identityRepository,
+    required ValueChanged<IdentitySession> onSessionChanged,
+  }) {
+    return Navigator.of(context).push<void>(
+      PageRouteBuilder<void>(
+        opaque: true,
+        barrierColor: const Color(0xff101010),
+        transitionDuration: const Duration(milliseconds: 280),
+        reverseTransitionDuration: const Duration(milliseconds: 240),
+        pageBuilder: (context, animation, secondaryAnimation) {
+          return AnnotatedRegion<SystemUiOverlayStyle>(
+            value: SystemUiOverlayStyle.light,
+            child: ColoredBox(
+              color: const Color(0xff101010),
+              child: SettingsScreen(
+                session: session,
+                identityRepository: identityRepository,
+                onSessionChanged: onSessionChanged,
+              ),
+            ),
+          );
+        },
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          final curved = CurvedAnimation(
+            parent: animation,
+            curve: Curves.easeOutCubic,
+            reverseCurve: Curves.easeInCubic,
+          );
+          return FadeTransition(
+            opacity: curved,
+            child: SlideTransition(
+              position: Tween<Offset>(
+                begin: const Offset(0, 0.04),
+                end: Offset.zero,
+              ).animate(curved),
+              child: child,
+            ),
+          );
+        },
+      ),
+    );
+  }
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -176,6 +226,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
     nameController.dispose();
   }
 
+  Future<void> _setHapticsEnabled(bool value) async {
+    setState(() => _hapticsEnabled = value);
+    try {
+      final session = await widget.identityRepository.updateSettings(
+        accentColorKey: _accentColorKey,
+        hapticsEnabled: value,
+        audioOutputPreference: _audioOutputPreference,
+      );
+      _persistedAccentColorKey = session.settings.accentColorKey;
+      _hasUnsavedAccentPreview = false;
+      if (!mounted) return;
+      setState(() => _acceptSession(session));
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _hapticsEnabled = !value;
+        _message = 'Couldn’t update haptics setting.';
+      });
+    }
+  }
+
   Future<void> _saveSettings() async {
     setState(() {
       _saving = true;
@@ -219,17 +290,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return Scaffold(
       backgroundColor: const Color(0xff101010),
       appBar: AppBar(
-        backgroundColor: Colors.transparent,
+        backgroundColor: const Color(0xff101010),
         foregroundColor: Colors.white,
         surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
         title: const Text('Settings'),
         centerTitle: true,
       ),
-      body: SafeArea(
-        top: false,
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
-          children: [
+      body: ColoredBox(
+        color: const Color(0xff101010),
+        child: SafeArea(
+          top: false,
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
+            children: [
             _ProfileHeader(
               session: _session,
               accent: accent,
@@ -288,7 +363,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   activeTrackColor: accent,
                   onChanged: _saving
                       ? null
-                      : (value) => setState(() => _hapticsEnabled = value),
+                      : (value) => unawaited(_setHapticsEnabled(value)),
                 ),
                 const _SurfaceDivider(),
                 const _PreferenceHeading(
@@ -414,7 +489,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 style: const TextStyle(color: Colors.white70),
               ),
             ],
-          ],
+            ],
+          ),
         ),
       ),
     );

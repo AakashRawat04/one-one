@@ -140,13 +140,12 @@ class _WaitingForGroupMembersScreenState
   }
 
   void _openSettings() {
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => SettingsScreen(
-          session: widget.session,
-          identityRepository: widget.identityRepository,
-          onSessionChanged: (_) {},
-        ),
+    unawaited(
+      SettingsScreen.open(
+        context,
+        session: widget.session,
+        identityRepository: widget.identityRepository,
+        onSessionChanged: (_) {},
       ),
     );
   }

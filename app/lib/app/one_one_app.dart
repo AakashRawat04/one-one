@@ -35,11 +35,18 @@ class OneOneApp extends StatelessWidget {
           theme: ThemeData(
             colorScheme: ColorScheme.fromSeed(
               seedColor: seedColor,
-              brightness: Brightness.light,
+              brightness: Brightness.dark,
             ),
+            brightness: Brightness.dark,
+            scaffoldBackgroundColor: const Color(0xff101010),
+            canvasColor: const Color(0xff101010),
             fontFamily: GoogleFonts.poppins().fontFamily,
-            textTheme: GoogleFonts.poppinsTextTheme(),
-            primaryTextTheme: GoogleFonts.poppinsTextTheme(),
+            textTheme: GoogleFonts.poppinsTextTheme(
+              ThemeData(brightness: Brightness.dark).textTheme,
+            ),
+            primaryTextTheme: GoogleFonts.poppinsTextTheme(
+              ThemeData(brightness: Brightness.dark).textTheme,
+            ),
             useMaterial3: true,
           ),
           home: const WithForegroundTask(

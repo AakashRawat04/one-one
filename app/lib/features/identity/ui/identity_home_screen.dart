@@ -15,10 +15,13 @@ import '../../groups/models/group_invite_result.dart';
 import '../../groups/models/group_member_summary.dart';
 import '../../groups/models/group_summary.dart';
 import '../../online/data/online_repository.dart';
+import '../../online/livekit_status.dart';
 import '../../online/models/member_availability.dart';
 import '../../online/models/online_session.dart';
+import '../../talk/data/hand_raise_repository.dart';
 import '../../talk/data/talk_repository.dart';
 import '../../talk/models/talk_session.dart';
+import '../../talk/talk_feedback.dart';
 import '../data/identity_repository.dart';
 import '../models/identity_session.dart';
 import 'group_action_screen.dart';
@@ -44,15 +47,19 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
   final GroupRepository _groupRepository = GroupRepository();
   final OnlineRepository _onlineRepository = OnlineRepository();
   final TalkRepository _talkRepository = TalkRepository();
+  final HandRaiseRepository _handRaiseRepository = HandRaiseRepository();
 
   late IdentitySession _session = widget.initialSession;
   List<GroupSummary> _groups = const [];
   List<GroupMemberSummary> _members = const [];
   Map<String, MemberAvailability> _availability = const {};
+  Map<String, bool> _handRaises = const {};
+  Set<String> _speakingUserIds = const {};
   GroupSummary? _selectedGroup;
   StreamSubscription<DatabaseEvent>? _availabilitySubscription;
   Timer? _availabilityExpiryTimer;
   StreamSubscription<DatabaseEvent>? _membersSubscription;
+  StreamSubscription<DatabaseEvent>? _handRaiseSubscription;
 
   OnlineSession? _onlineSession;
   TalkSession? _talkSession;
@@ -69,8 +76,11 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
   bool _busy = false;
   bool _talkBusy = false;
   bool _talkPressed = false;
+  bool _handRaiseBusy = false;
   String _state = 'away';
   String? _message;
+  ConnectionQuality _localConnectionQuality = ConnectionQuality.unknown;
+  Map<String, ConnectionQuality> _remoteConnectionQualityByUserId = const {};
 
   @override
   void initState() {
@@ -85,6 +95,7 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
     _availabilitySubscription?.cancel();
     _availabilityExpiryTimer?.cancel();
     _membersSubscription?.cancel();
+    _handRaiseSubscription?.cancel();
     _heartbeatTimer?.cancel();
     final activeTalk = _talkSession;
     if (activeTalk != null) {
@@ -139,10 +150,11 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
         await _loadMembers(selected.groupId);
         _listenToMembers(selected.groupId);
         _listenToAvailability(selected.groupId);
+        _listenToHandRaises(selected.groupId);
       }
     } catch (error) {
       if (!mounted) return;
-      setState(() => _message = error.toString());
+      setState(() => _message = LiveKitStatus.sanitizeError(error));
     } finally {
       if (mounted && _loadingGroups) {
         setState(() => _loadingGroups = false);
@@ -206,6 +218,34 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
         });
   }
 
+  void _listenToHandRaises(String groupId) {
+    unawaited(_handRaiseSubscription?.cancel());
+    _handRaiseSubscription = _handRaiseRepository
+        .raisesRef(groupId)
+        .onValue
+        .listen((event) {
+          if (!mounted || _selectedGroup?.groupId != groupId) return;
+          final next = HandRaiseRepository.parseSnapshot(event.snapshot.value);
+          final previous = _handRaises;
+          final newlyRaised = next.entries.where(
+            (entry) =>
+                entry.value &&
+                entry.key != _session.userId &&
+                previous[entry.key] != true,
+          );
+
+          setState(() => _handRaises = next);
+
+          if (newlyRaised.isNotEmpty) {
+            unawaited(
+              TalkFeedback.remoteHandRaised(
+                hapticsEnabled: _session.settings.hapticsEnabled,
+              ),
+            );
+          }
+        });
+  }
+
   void _scheduleAvailabilityExpiryRefresh() {
     _availabilityExpiryTimer?.cancel();
     final now =
@@ -233,10 +273,13 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
       _selectedGroup = group;
       _members = const [];
       _availability = const {};
+      _handRaises = const {};
+      _speakingUserIds = const {};
     });
     await _loadMembers(group.groupId);
     _listenToMembers(group.groupId);
     _listenToAvailability(group.groupId);
+    _listenToHandRaises(group.groupId);
   }
 
   Future<void> _onGroupCarouselChanged(int index) async {
@@ -272,13 +315,21 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
   }
 
   void _openCreateGroup() {
+    _openGroupAction(GroupActionMode.createGroup);
+  }
+
+  void _openJoinGroup() {
+    _openGroupAction(GroupActionMode.joinByPin);
+  }
+
+  void _openGroupAction(GroupActionMode mode) {
     Navigator.of(context).push(
       PageRouteBuilder<void>(
         transitionDuration: const Duration(milliseconds: 320),
         reverseTransitionDuration: const Duration(milliseconds: 260),
         pageBuilder: (context, animation, secondaryAnimation) {
           return GroupActionScreen(
-            mode: GroupActionMode.createGroup,
+            mode: mode,
             session: _session,
             identityRepository: widget.identityRepository,
           );
@@ -513,7 +564,7 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
       setState(() {
         _onlineSession = createdSession;
         _state = 'live';
-        _message = 'Live';
+        _message = LiveKitStatus.live;
       });
     } catch (error) {
       await _disconnectLiveKit();
@@ -527,7 +578,7 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
       if (!mounted) return;
       setState(() {
         _state = 'away';
-        _message = error.toString();
+        _message = LiveKitStatus.sanitizeError(error);
       });
     } finally {
       if (mounted) {
@@ -556,8 +607,9 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
       setState(() {
         _onlineSession = null;
         _talkSession = null;
+        _speakingUserIds = const {};
         _state = 'away';
-        _message = 'Away';
+        _message = LiveKitStatus.away;
       });
     });
   }
@@ -587,8 +639,18 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
       }
 
       await _setMicrophoneEnabled(true);
-      if (_session.settings.hapticsEnabled) {
-        unawaited(HapticFeedback.mediumImpact());
+      unawaited(
+        TalkFeedback.talkStarted(
+          hapticsEnabled: _session.settings.hapticsEnabled,
+        ),
+      );
+      if (_handRaises[_session.userId] == true) {
+        unawaited(
+          _handRaiseRepository.clearRaised(
+            groupId: session.groupId,
+            userId: _session.userId,
+          ),
+        );
       }
       if (!mounted) return;
 
@@ -605,7 +667,7 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
       setState(() {
         _talkSession = startedTalk;
         _state = 'talking';
-        _message = 'Talking';
+        _message = LiveKitStatus.talking;
       });
     } catch (error) {
       if (startedTalk != null) {
@@ -615,7 +677,7 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
       setState(() {
         _talkSession = null;
         _state = _onlineSession == null ? 'away' : 'live';
-        _message = error.toString();
+        _message = LiveKitStatus.sanitizeError(error);
       });
     } finally {
       if (mounted) {
@@ -632,6 +694,7 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
     setState(() {
       _talkSession = null;
       _state = 'live';
+      _message = LiveKitStatus.live;
     });
 
     Object? stopError;
@@ -642,9 +705,11 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
     }
 
     try {
-      if (_session.settings.hapticsEnabled) {
-        unawaited(HapticFeedback.selectionClick());
-      }
+      unawaited(
+        TalkFeedback.talkStopped(
+          hapticsEnabled: _session.settings.hapticsEnabled,
+        ),
+      );
       await _talkRepository.stopTalk(talkSession, reason: reason);
     } catch (error) {
       stopError ??= error;
@@ -652,7 +717,33 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
 
     if (stopError != null) {
       if (!mounted) return;
-      setState(() => _message = 'Talk stop failed: $stopError');
+      setState(() => _message = 'Couldn’t stop talking. Try again.');
+    }
+  }
+
+  Future<void> _toggleHandRaise() async {
+    final group = _selectedGroup;
+    if (group == null || _handRaiseBusy) return;
+
+    final nextRaised = _handRaises[_session.userId] != true;
+    setState(() => _handRaiseBusy = true);
+    try {
+      await _handRaiseRepository.setRaised(
+        groupId: group.groupId,
+        userId: _session.userId,
+        raised: nextRaised,
+      );
+      unawaited(
+        TalkFeedback.handRaiseChanged(
+          raised: nextRaised,
+          hapticsEnabled: _session.settings.hapticsEnabled,
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _message = 'Couldn’t update hand raise.');
+    } finally {
+      if (mounted) setState(() => _handRaiseBusy = false);
     }
   }
 
@@ -672,7 +763,7 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
 
     setState(() {
       _state = 'connecting';
-      _message = 'Connecting to LiveKit';
+      _message = LiveKitStatus.connecting;
     });
 
     await room
@@ -699,41 +790,137 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
         .timeout(const Duration(seconds: 8));
   }
 
+  String? _participantUserIdFromIdentity(String identity) {
+    final parts = identity.split(':');
+    if (parts.length < 3) return null;
+    return parts[1];
+  }
+
+
+  ConnectionQuality _mergeConnectionQuality(
+    ConnectionQuality? existing,
+    ConnectionQuality incoming,
+  ) {
+    if (existing == null) return incoming;
+
+    const order = [
+      ConnectionQuality.lost,
+      ConnectionQuality.poor,
+      ConnectionQuality.unknown,
+      ConnectionQuality.good,
+      ConnectionQuality.excellent,
+    ];
+
+    final existingIndex = order.indexOf(existing);
+    final incomingIndex = order.indexOf(incoming);
+    return existingIndex <= incomingIndex ? existing : incoming;
+  }
+
+  void _syncConnectionQualities(Room room) {
+    if (!mounted) return;
+
+    final remotes = <String, ConnectionQuality>{};
+    for (final participant in room.remoteParticipants.values) {
+      final userId = _participantUserIdFromIdentity(participant.identity);
+      if (userId == null) continue;
+      remotes[userId] = _mergeConnectionQuality(
+        remotes[userId],
+        participant.connectionQuality,
+      );
+    }
+
+    setState(() {
+      _localConnectionQuality =
+          room.localParticipant?.connectionQuality ??
+          ConnectionQuality.unknown;
+      _remoteConnectionQualityByUserId = remotes;
+    });
+  }
+
+  void _updateParticipantConnectionQuality(
+    Participant participant,
+    ConnectionQuality quality,
+  ) {
+    if (!mounted) return;
+
+    if (participant is LocalParticipant) {
+      setState(() => _localConnectionQuality = quality);
+      return;
+    }
+
+    final userId = _participantUserIdFromIdentity(participant.identity);
+    if (userId == null) return;
+
+    setState(() {
+      _remoteConnectionQualityByUserId = {
+        ..._remoteConnectionQualityByUserId,
+        userId: _mergeConnectionQuality(
+          _remoteConnectionQualityByUserId[userId],
+          quality,
+        ),
+      };
+    });
+  }
+
+  void _clearConnectionQualities() {
+    _localConnectionQuality = ConnectionQuality.unknown;
+    _remoteConnectionQualityByUserId = const {};
+    if (mounted) setState(() {});
+  }
+
   void _attachRoomListener(Room room) {
     _roomListener = room.createListener()
       ..on<RoomConnectedEvent>((_) {
-        _setMessage('LiveKit connected');
+        _syncConnectionQualities(room);
+        _setMessage(LiveKitStatus.connected);
       })
       ..on<RoomReconnectingEvent>((_) {
-        _setStateAndMessage('reconnecting', 'LiveKit reconnecting');
+        _setStateAndMessage('reconnecting', LiveKitStatus.reconnecting);
       })
       ..on<RoomReconnectedEvent>((_) {
-        _setStateAndMessage('live', 'LiveKit reconnected');
+        _syncConnectionQualities(room);
+        _setStateAndMessage('live', LiveKitStatus.connected);
       })
       ..on<RoomDisconnectedEvent>((event) {
-        _setStateAndMessage(
-          'disconnected',
-          'LiveKit disconnected: ${event.reason}',
-        );
+        if (!mounted) return;
+        setState(() {
+          _speakingUserIds = const {};
+          _state = 'disconnected';
+          _message = LiveKitStatus.fromDisconnectReason(event.reason);
+        });
+        _clearConnectionQualities();
       })
       ..on<ParticipantConnectedEvent>((event) {
-        _setMessage('${event.participant.identity} joined');
-      })
-      ..on<TrackSubscribedEvent>((event) {
-        final isAudio = event.track is RemoteAudioTrack;
-        _setMessage(
-          isAudio
-              ? 'Audio subscribed from ${event.participant.identity}'
-              : 'Track subscribed from ${event.participant.identity}',
+        _updateParticipantConnectionQuality(
+          event.participant,
+          event.participant.connectionQuality,
         );
+      })
+      ..on<ParticipantConnectionQualityUpdatedEvent>((event) {
+        _updateParticipantConnectionQuality(
+          event.participant,
+          event.connectionQuality,
+        );
+      })
+      ..on<TrackSubscribedEvent>((_) {
+        // Subscription is an implementation detail — keep UI status clean.
       })
       ..on<ActiveSpeakersChangedEvent>((event) {
-        final remoteSpeakers = event.speakers.where(
-          (speaker) => speaker.identity != room.localParticipant?.identity,
-        );
-        if (remoteSpeakers.isNotEmpty) {
-          _setMessage('Receiving voice');
+        final speaking = <String>{};
+        for (final speaker in event.speakers) {
+          final userId =
+              LiveKitStatus.userIdFromIdentity(speaker.identity) ??
+              _participantUserIdFromIdentity(speaker.identity);
+          if (userId != null) speaking.add(userId);
         }
+        if (!mounted) return;
+        setState(() {
+          _speakingUserIds = speaking;
+          final remoteSpeaking = speaking.any((id) => id != _session.userId);
+          if (remoteSpeaking && _talkSession == null) {
+            _message = LiveKitStatus.receivingVoice;
+          }
+        });
       });
   }
 
@@ -742,6 +929,8 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
     _room = null;
     _roomListener?.dispose();
     _roomListener = null;
+    _speakingUserIds = const {};
+    _clearConnectionQualities();
 
     try {
       final localParticipant = room?.localParticipant;
@@ -776,7 +965,7 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
       await action();
     } catch (error) {
       if (!mounted) return;
-      setState(() => _message = error.toString());
+      setState(() => _message = LiveKitStatus.sanitizeError(error));
     } finally {
       if (mounted) {
         setState(() => _busy = false);
@@ -811,15 +1000,14 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
   }
 
   void _openSettings() {
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => SettingsScreen(
-          session: _session,
-          identityRepository: widget.identityRepository,
-          onSessionChanged: (session) {
-            setState(() => _session = session);
-          },
-        ),
+    unawaited(
+      SettingsScreen.open(
+        context,
+        session: _session,
+        identityRepository: widget.identityRepository,
+        onSessionChanged: (session) {
+          setState(() => _session = session);
+        },
       ),
     );
   }
@@ -876,6 +1064,25 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
 
   bool get _isOnline => _onlineSession != null;
 
+  /// Single-word presence label shown beneath the online/offline toggle.
+  /// Recomputed on every `setState` that touches `_state`/`_onlineSession`,
+  /// so it updates immediately as the toggle changes.
+  String get _presenceStatusLabel {
+    switch (_state) {
+      case 'talking':
+      case 'live':
+        return 'Live';
+      case 'connecting':
+      case 'reconnecting':
+        return 'Online';
+      case 'disconnected':
+        return 'Offline';
+      case 'away':
+      default:
+        return 'Away';
+    }
+  }
+
   bool get _serviceReady =>
       groupHasServicePeer(members: _members, currentUserId: _session.userId);
 
@@ -905,6 +1112,7 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
           availability: group.groupId == _selectedGroup?.groupId
               ? selfAvailability
               : MemberAvailability.away,
+          members: group.groupId == _selectedGroup?.groupId ? _members : const [],
         ),
     ];
   }
@@ -942,11 +1150,17 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
                   online: live,
                   enabled: _serviceReady,
                   onTogglePresence: _togglePresence,
+                  showNetworkStrength: _isOnline,
+                  localConnectionQuality: _localConnectionQuality,
+                  statusLabel: _presenceStatusLabel,
                 ),
                 SizedBox(height: 8.h),
                 _FriendsStrip(
                   friends: _friends,
                   availability: _availability,
+                  speakingUserIds: _speakingUserIds,
+                  handRaises: _handRaises,
+                  connectionQualityByUserId: _remoteConnectionQualityByUserId,
                   onInvite: inviteAction,
                 ),
                 if (_message != null) ...[
@@ -968,6 +1182,9 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
                     displayName: _session.user.displayName,
                     isLive: live,
                     isTalking: _state == 'talking',
+                    handRaised: _handRaises[_session.userId] == true,
+                    handRaiseBusy: _handRaiseBusy,
+                    onHandRaise: _toggleHandRaise,
                     groupName: focusedGroup.name,
                     onTapName: _groups.length > 1 ? _openGroupPicker : null,
                   ),
@@ -988,8 +1205,16 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
                     onTalkStart: _startTalking,
                     onTalkStop: () => _stopTalking(),
                     onCreateGroup: _openCreateGroup,
+                    onJoinGroup: _openJoinGroup,
                   ),
                 ),
+                if (items.length > 1) ...[
+                  SizedBox(height: 8.h),
+                  _CarouselDotIndicator(
+                    count: items.length,
+                    index: _carouselIndex.clamp(0, items.length - 1),
+                  ),
+                ],
                 SizedBox(height: 18.h),
                 Text(
                   _isOnline
@@ -1090,6 +1315,9 @@ class _TopChrome extends StatelessWidget {
     required this.online,
     required this.enabled,
     required this.onTogglePresence,
+    required this.showNetworkStrength,
+    required this.localConnectionQuality,
+    required this.statusLabel,
   });
 
   final VoidCallback onSettings;
@@ -1099,6 +1327,9 @@ class _TopChrome extends StatelessWidget {
   final bool online;
   final bool enabled;
   final VoidCallback onTogglePresence;
+  final bool showNetworkStrength;
+  final ConnectionQuality localConnectionQuality;
+  final String statusLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -1118,41 +1349,70 @@ class _TopChrome extends StatelessWidget {
             ),
             Align(
               alignment: Alignment.centerLeft,
-              child: Stack(
-                clipBehavior: Clip.none,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  _GlassIconButton(
-                    tooltip: hasSetupWarnings ? 'Settings / Setup' : 'Settings',
-                    icon: Icons.settings_outlined,
-                    onPressed: onSettings,
-                    onLongPress: onSetup,
-                  ),
-                  if (hasSetupWarnings)
-                    Positioned(
-                      top: -2,
-                      right: -2,
-                      child: GestureDetector(
-                        onTap: onSetup,
-                        child: Container(
-                          width: 14.w,
-                          height: 14.w,
-                          decoration: const BoxDecoration(
-                            color: Color(0xffff5a5f),
-                            shape: BoxShape.circle,
+                  Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      _GlassIconButton(
+                        tooltip:
+                            hasSetupWarnings ? 'Settings / Setup' : 'Settings',
+                        icon: Icons.settings_outlined,
+                        onPressed: onSettings,
+                        onLongPress: onSetup,
+                      ),
+                      if (hasSetupWarnings)
+                        Positioned(
+                          top: -2,
+                          right: -2,
+                          child: GestureDetector(
+                            onTap: onSetup,
+                            child: Container(
+                              width: 14.w,
+                              height: 14.w,
+                              decoration: const BoxDecoration(
+                                color: Color(0xffff5a5f),
+                                shape: BoxShape.circle,
+                              ),
+                            ),
                           ),
                         ),
-                      ),
+                    ],
+                  ),
+                  if (showNetworkStrength) ...[
+                    SizedBox(width: 6.w),
+                    _NetworkStrengthIndicator(
+                      quality: localConnectionQuality,
+                      tooltip: 'Your network',
                     ),
+                  ],
                 ],
               ),
             ),
             Align(
               alignment: Alignment.centerRight,
-              child: _StatusToggle(
-                busy: busy,
-                online: online,
-                enabled: enabled,
-                onToggle: onTogglePresence,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  _StatusToggle(
+                    busy: busy,
+                    online: online,
+                    enabled: enabled,
+                    onToggle: onTogglePresence,
+                  ),
+                  SizedBox(height: 3.h),
+                  Text(
+                    statusLabel,
+                    style: TextStyle(
+                      color: const Color.fromRGBO(255, 255, 255, 0.65),
+                      fontSize: 10.sp,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.2,
+                    ),
+                  ),
+                ],
               ),
             ),
           ],
@@ -1295,11 +1555,17 @@ class _FriendsStrip extends StatelessWidget {
   const _FriendsStrip({
     required this.friends,
     required this.availability,
+    required this.speakingUserIds,
+    required this.handRaises,
+    required this.connectionQualityByUserId,
     required this.onInvite,
   });
 
   final List<GroupMemberSummary> friends;
   final Map<String, MemberAvailability> availability;
+  final Set<String> speakingUserIds;
+  final Map<String, bool> handRaises;
+  final Map<String, ConnectionQuality> connectionQualityByUserId;
   final VoidCallback? onInvite;
 
   @override
@@ -1321,7 +1587,7 @@ class _FriendsStrip extends StatelessWidget {
         ),
         SizedBox(height: 10.h),
         SizedBox(
-          height: 78.h,
+          height: 104.h,
           child: ListView(
             scrollDirection: Axis.horizontal,
             padding: EdgeInsets.symmetric(horizontal: 16.w),
@@ -1329,8 +1595,17 @@ class _FriendsStrip extends StatelessWidget {
               for (final friend in friends) ...[
                 _FriendChip(
                   name: friend.displayName,
+                  profilePhotoUrl: friend.profilePhotoUrl,
+                  profilePhotoBase64: friend.profilePhotoBase64,
                   availability:
                       availability[friend.userId] ?? MemberAvailability.away,
+                  isSpeaking:
+                      speakingUserIds.contains(friend.userId) ||
+                      (availability[friend.userId]?.isTalking ?? false),
+                  handRaised: handRaises[friend.userId] == true,
+                  connectionQuality:
+                      connectionQualityByUserId[friend.userId] ??
+                      ConnectionQuality.unknown,
                 ),
                 SizedBox(width: 12.w),
               ],
@@ -1344,23 +1619,48 @@ class _FriendsStrip extends StatelessWidget {
 }
 
 class _FriendChip extends StatelessWidget {
-  const _FriendChip({required this.name, required this.availability});
+  const _FriendChip({
+    required this.name,
+    required this.profilePhotoUrl,
+    required this.profilePhotoBase64,
+    required this.availability,
+    required this.isSpeaking,
+    required this.handRaised,
+    required this.connectionQuality,
+  });
 
   final String name;
+  final String? profilePhotoUrl;
+  final String? profilePhotoBase64;
   final MemberAvailability availability;
+  final bool isSpeaking;
+  final bool handRaised;
+  final ConnectionQuality connectionQuality;
 
   @override
   Widget build(BuildContext context) {
     final live = availability.isLive;
+    final degradedNetwork =
+        connectionQuality == ConnectionQuality.poor ||
+        connectionQuality == ConnectionQuality.lost;
+    final shortName = name.trim().split(RegExp(r'\s+')).first;
     final initial = name.trim().isEmpty
         ? '?'
         : name.trim().substring(0, 1).toUpperCase();
+    final ringColor = isSpeaking
+        ? const Color(0xff7CFF6B)
+        : live
+        ? const Color(0xff7CFF6B)
+        : Colors.white24;
 
     return Column(
       children: [
         Stack(
           clipBehavior: Clip.none,
+          alignment: Alignment.center,
           children: [
+            if (isSpeaking)
+              const _TalkingPulseRing(color: Color(0xff7CFF6B), size: 60),
             Container(
               width: 52.w,
               height: 52.w,
@@ -1369,16 +1669,24 @@ class _FriendChip extends StatelessWidget {
                 shape: BoxShape.circle,
                 color: const Color(0xff2a2a2a),
                 border: Border.all(
-                  color: live ? const Color(0xff7CFF6B) : Colors.white24,
-                  width: 2,
+                  color: ringColor,
+                  width: isSpeaking ? 2.5 : 2,
                 ),
               ),
-              child: Text(
-                initial,
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 18.sp,
-                  fontWeight: FontWeight.w700,
+              child: ClipOval(
+                child: ProfileAvatar(
+                  profilePhotoUrl: profilePhotoUrl,
+                  profilePhotoBase64: profilePhotoBase64,
+                  radius: 26.w,
+                  backgroundColor: const Color(0xff2a2a2a),
+                  fallback: Text(
+                    initial,
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 18.sp,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
                 ),
               ),
             ),
@@ -1386,7 +1694,11 @@ class _FriendChip extends StatelessWidget {
               right: -4,
               bottom: -2,
               child: Text(
-                live ? '🟢' : '🌙',
+                handRaised
+                    ? '✋'
+                    : live
+                    ? '🟢'
+                    : '🌙',
                 style: TextStyle(fontSize: 14.sp),
               ),
             ),
@@ -1394,20 +1706,150 @@ class _FriendChip extends StatelessWidget {
         ),
         SizedBox(height: 4.h),
         SizedBox(
-          width: 56.w,
+          width: 72.w,
           child: Text(
-            name,
+            isSpeaking ? '🗣️ talking' : name,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             textAlign: TextAlign.center,
             style: TextStyle(
-              color: Colors.white70,
+              color: isSpeaking ? const Color(0xff7CFF6B) : Colors.white70,
               fontSize: 10.sp,
               fontWeight: FontWeight.w600,
             ),
           ),
         ),
+        if (degradedNetwork && !isSpeaking) ...[
+          SizedBox(height: 2.h),
+          SizedBox(
+            width: 72.w,
+            child: Text(
+              "${shortName.isEmpty ? 'Their' : shortName}'s network is low",
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: const Color(0xffffb347),
+                fontSize: 8.sp,
+                fontWeight: FontWeight.w600,
+                height: 1.1,
+              ),
+            ),
+          ),
+        ],
       ],
+    );
+  }
+}
+
+class _TalkingPulseRing extends StatefulWidget {
+  const _TalkingPulseRing({required this.color, required this.size});
+
+  final Color color;
+  final double size;
+
+  @override
+  State<_TalkingPulseRing> createState() => _TalkingPulseRingState();
+}
+
+class _TalkingPulseRingState extends State<_TalkingPulseRing>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1100),
+  )..repeat();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, _) {
+        final t = _controller.value;
+        final scale = 1 + (0.18 * t);
+        final opacity = (1 - t).clamp(0.0, 1.0);
+        return Transform.scale(
+          scale: scale,
+          child: Container(
+            width: widget.size.w,
+            height: widget.size.w,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: widget.color.withValues(alpha: 0.55 * opacity),
+                width: 2,
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _NetworkStrengthIndicator extends StatelessWidget {
+  const _NetworkStrengthIndicator({
+    required this.quality,
+    required this.tooltip,
+  });
+
+  final ConnectionQuality quality;
+  final String tooltip;
+
+  @override
+  Widget build(BuildContext context) {
+    final activeBars = switch (quality) {
+      ConnectionQuality.excellent => 4,
+      ConnectionQuality.good => 3,
+      ConnectionQuality.poor => 1,
+      ConnectionQuality.lost => 0,
+      ConnectionQuality.unknown => 0,
+    };
+    final color = switch (quality) {
+      ConnectionQuality.excellent => const Color(0xff7CFF6B),
+      ConnectionQuality.good => Colors.white,
+      ConnectionQuality.poor => const Color(0xffffb347),
+      ConnectionQuality.lost => const Color(0xffff5a5f),
+      ConnectionQuality.unknown => Colors.white38,
+    };
+
+    return Tooltip(
+      message: tooltip,
+      child: Container(
+        width: 36.w,
+        height: 36.w,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: const Color.fromRGBO(0, 0, 0, 0.35),
+          border: Border.all(
+            color: const Color.fromRGBO(255, 255, 255, 0.18),
+          ),
+        ),
+        child: quality == ConnectionQuality.lost
+            ? Icon(Icons.signal_cellular_off, color: color, size: 18.sp)
+            : Row(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  for (var bar = 0; bar < 4; bar++)
+                    Container(
+                      width: 3.w,
+                      height: (6 + bar * 3).h,
+                      margin: EdgeInsets.only(right: bar == 3 ? 0 : 1.5.w),
+                      decoration: BoxDecoration(
+                        color: bar < activeBars ? color : Colors.white24,
+                        borderRadius: BorderRadius.circular(1.r),
+                      ),
+                    ),
+                ],
+              ),
+      ),
     );
   }
 }
@@ -1456,6 +1898,9 @@ class _CarouselCaption extends StatelessWidget {
     required this.displayName,
     required this.isLive,
     required this.isTalking,
+    required this.handRaised,
+    required this.handRaiseBusy,
+    required this.onHandRaise,
     required this.groupName,
     required this.onTapName,
   });
@@ -1463,6 +1908,9 @@ class _CarouselCaption extends StatelessWidget {
   final String displayName;
   final bool isLive;
   final bool isTalking;
+  final bool handRaised;
+  final bool handRaiseBusy;
+  final VoidCallback onHandRaise;
   final String? groupName;
   final VoidCallback? onTapName;
 
@@ -1477,8 +1925,6 @@ class _CarouselCaption extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text('👋', style: TextStyle(fontSize: 18.sp)),
-              SizedBox(width: 6.w),
               Text(
                 (groupName ?? name).toLowerCase(),
                 style: TextStyle(
@@ -1508,20 +1954,92 @@ class _CarouselCaption extends StatelessWidget {
           ),
         ),
         SizedBox(height: 10.h),
-        if (isLive || isTalking)
-          Container(
-            padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 7.h),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(18.r),
-            ),
-            child: Text(
-              isTalking ? '🎙️ talking!' : '👀 is here!',
-              style: TextStyle(
-                color: Colors.black,
-                fontSize: 13.sp,
-                fontWeight: FontWeight.w700,
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            if (isLive || isTalking)
+              Container(
+                padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 7.h),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(18.r),
+                ),
+                child: Text(
+                  isTalking ? '🎙️ talking!' : '👀 is here!',
+                  style: TextStyle(
+                    color: Colors.black,
+                    fontSize: 13.sp,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
               ),
+            if (isLive || isTalking) SizedBox(width: 8.w),
+            Opacity(
+              opacity: handRaiseBusy ? 0.55 : 1,
+              child: Material(
+                color: handRaised
+                    ? const Color(0xfffff1a8)
+                    : const Color.fromRGBO(255, 255, 255, 0.14),
+                borderRadius: BorderRadius.circular(18.r),
+                child: InkWell(
+                  onTap: handRaiseBusy ? null : onHandRaise,
+                  borderRadius: BorderRadius.circular(18.r),
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(
+                      horizontal: 12.w,
+                      vertical: 7.h,
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text('✋', style: TextStyle(fontSize: 13.sp)),
+                        SizedBox(width: 6.w),
+                        Text(
+                          handRaised ? 'Hand raised' : 'Raise hand',
+                          style: TextStyle(
+                            color: handRaised ? Colors.black : Colors.white,
+                            fontSize: 13.sp,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+/// Page-indicator dots shown below the group carousel when the user has
+/// more than one group, so position/count is obvious at a glance.
+class _CarouselDotIndicator extends StatelessWidget {
+  const _CarouselDotIndicator({required this.count, required this.index});
+
+  final int count;
+  final int index;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        for (var i = 0; i < count; i++)
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+            margin: EdgeInsets.symmetric(horizontal: 3.w),
+            width: i == index ? 16.w : 6.w,
+            height: 6.w,
+            decoration: BoxDecoration(
+              color: i == index
+                  ? Colors.white
+                  : const Color.fromRGBO(255, 255, 255, 0.35),
+              borderRadius: BorderRadius.circular(3.r),
             ),
           ),
       ],
@@ -1542,6 +2060,7 @@ class _ExperienceCarousel extends StatelessWidget {
     required this.onTalkStart,
     required this.onTalkStop,
     required this.onCreateGroup,
+    required this.onJoinGroup,
   });
 
   final PageController controller;
@@ -1555,6 +2074,7 @@ class _ExperienceCarousel extends StatelessWidget {
   final Future<void> Function() onTalkStart;
   final Future<void> Function() onTalkStop;
   final VoidCallback onCreateGroup;
+  final VoidCallback onJoinGroup;
 
   @override
   Widget build(BuildContext context) {
@@ -1562,11 +2082,23 @@ class _ExperienceCarousel extends StatelessWidget {
       return Row(
         children: [
           const Spacer(),
-          _DashedAddCircle(onTap: onCreateGroup, compact: true),
+          _DashedAddCircle(
+            onTap: onJoinGroup,
+            compact: true,
+            label: '+ join\ngroup',
+          ),
+          SizedBox(width: 12.w),
+          _DashedAddCircle(
+            onTap: onCreateGroup,
+            compact: true,
+            label: '+ create\nnew group',
+          ),
           SizedBox(width: 16.w),
         ],
       );
     }
+
+    final has3d = items.length > 1;
 
     return Row(
       children: [
@@ -1580,27 +2112,70 @@ class _ExperienceCarousel extends StatelessWidget {
               final item = items[itemIndex];
               final selected = itemIndex == index;
 
-              return AnimatedScale(
-                scale: selected ? 1.0 : 0.78,
-                duration: const Duration(milliseconds: 220),
-                curve: Curves.easeOutCubic,
-                child: Center(
-                  child: _MainAvatarCircle(
-                    item: item,
-                    selected: selected,
-                    talkEnabled: talkEnabled && selected,
-                    talkActive: talkActive && selected,
-                    talkBusy: talkBusy,
-                    accent: accent,
-                    onTalkStart: onTalkStart,
-                    onTalkStop: onTalkStop,
-                  ),
+              final avatar = Center(
+                child: _MainAvatarCircle(
+                  item: item,
+                  selected: selected,
+                  talkEnabled: talkEnabled && selected,
+                  talkActive: talkActive && selected,
+                  talkBusy: talkBusy,
+                  accent: accent,
+                  onTalkStart: onTalkStart,
+                  onTalkStop: onTalkStop,
                 ),
+              );
+
+              if (!has3d) {
+                return AnimatedScale(
+                  scale: selected ? 1.0 : 0.78,
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeOutCubic,
+                  child: avatar,
+                );
+              }
+
+              // Light 3D card-stack feel: continuously tilt/scale/fade each
+              // card based on its live distance from the current page, so
+              // it reads as a swipeable stack rather than a flat list.
+              return AnimatedBuilder(
+                animation: controller,
+                builder: (context, child) {
+                  var page = index.toDouble();
+                  if (controller.hasClients) {
+                    page = controller.page ?? index.toDouble();
+                  }
+                  final delta = (itemIndex - page).clamp(-1.4, 1.4);
+                  final scale = (1 - delta.abs() * 0.24).clamp(0.7, 1.0);
+                  final opacity = (1 - delta.abs() * 0.35).clamp(0.45, 1.0);
+                  final rotationY = delta * 0.55;
+
+                  return Opacity(
+                    opacity: opacity,
+                    child: Transform(
+                      alignment: Alignment.center,
+                      transform: Matrix4.identity()
+                        ..setEntry(3, 2, 0.0012)
+                        ..rotateY(rotationY),
+                      child: Transform.scale(scale: scale, child: child),
+                    ),
+                  );
+                },
+                child: avatar,
               );
             },
           ),
         ),
-        _DashedAddCircle(onTap: onCreateGroup, compact: true),
+        _DashedAddCircle(
+          onTap: onJoinGroup,
+          compact: true,
+          label: '+ join\ngroup',
+        ),
+        SizedBox(width: 12.w),
+        _DashedAddCircle(
+          onTap: onCreateGroup,
+          compact: true,
+          label: '+ create\nnew group',
+        ),
         SizedBox(width: 16.w),
       ],
     );
@@ -1646,22 +2221,44 @@ class _MainAvatarCircle extends StatelessWidget {
         child: Stack(
           fit: StackFit.expand,
           children: [
-            ProfileAvatar(
-              profilePhotoUrl: item.profilePhotoUrl,
-              profilePhotoBase64: item.profilePhotoBase64,
-              radius: size / 2,
-              backgroundColor: const Color(0xff2a2a2a),
-              fallback: Icon(
-                Icons.person_outline,
-                color: Colors.white70,
-                size: size * 0.4,
-              ),
+            _MemberPhotoCollage(
+              members: item.members,
+              fallbackPhotoUrl: item.profilePhotoUrl,
+              fallbackPhotoBase64: item.profilePhotoBase64,
+              tileSize: size,
             ),
             if (talkActive)
               ColoredBox(
                 color: accent.withValues(alpha: 0.28),
                 child: Icon(Icons.mic, color: Colors.white, size: size * 0.28),
               ),
+            // Small persistent mic badge so the circle reads as a "tap to
+            // talk" control at a glance, even before/after an active call.
+            Align(
+              alignment: Alignment.bottomCenter,
+              child: Padding(
+                padding: EdgeInsets.only(bottom: size * 0.06),
+                child: Container(
+                  width: size * 0.26,
+                  height: size * 0.26,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: talkActive
+                        ? accent
+                        : const Color.fromRGBO(0, 0, 0, 0.55),
+                    border: Border.all(
+                      color: Colors.white,
+                      width: 1.4,
+                    ),
+                  ),
+                  child: Icon(
+                    Icons.mic,
+                    color: Colors.white,
+                    size: size * 0.15,
+                  ),
+                ),
+              ),
+            ),
           ],
         ),
       ),
@@ -1694,11 +2291,173 @@ class _MainAvatarCircle extends StatelessWidget {
   }
 }
 
+/// Tiles up to [_maxTiles] group members' photos inside the connect circle
+/// so it's obvious at a glance which group/members you're about to connect
+/// with. Falls back to a single self-avatar when member data isn't loaded
+/// yet (e.g. for a group that isn't focused in the carousel).
+class _MemberPhotoCollage extends StatelessWidget {
+  const _MemberPhotoCollage({
+    required this.members,
+    required this.fallbackPhotoUrl,
+    required this.fallbackPhotoBase64,
+    required this.tileSize,
+  });
+
+  static const int _maxTiles = 4;
+
+  final List<GroupMemberSummary> members;
+  final String? fallbackPhotoUrl;
+  final String? fallbackPhotoBase64;
+  final double tileSize;
+
+  @override
+  Widget build(BuildContext context) {
+    if (members.isEmpty) {
+      return ProfileImage(
+        profilePhotoUrl: fallbackPhotoUrl,
+        profilePhotoBase64: fallbackPhotoBase64,
+        backgroundColor: const Color(0xff2a2a2a),
+        fallback: Icon(
+          Icons.person_outline,
+          color: Colors.white70,
+          size: tileSize * 0.4,
+        ),
+      );
+    }
+
+    final tiles = members.take(_maxTiles).toList(growable: false);
+    final overflow = members.length - tiles.length;
+
+    Widget tile(GroupMemberSummary member) {
+      final initial = member.displayName.trim().isEmpty
+          ? '?'
+          : member.displayName.trim().substring(0, 1).toUpperCase();
+      return ProfileImage(
+        profilePhotoUrl: member.profilePhotoUrl,
+        profilePhotoBase64: member.profilePhotoBase64,
+        backgroundColor: const Color(0xff2a2a2a),
+        fallback: Text(
+          initial,
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: tileSize * 0.16,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      );
+    }
+
+    Widget grid;
+    switch (tiles.length) {
+      case 1:
+        grid = tile(tiles[0]);
+      case 2:
+        grid = Row(
+          children: [
+            Expanded(child: tile(tiles[0])),
+            _CollageDivider(vertical: true, length: tileSize),
+            Expanded(child: tile(tiles[1])),
+          ],
+        );
+      case 3:
+        grid = Column(
+          children: [
+            Expanded(child: tile(tiles[0])),
+            _CollageDivider(vertical: false, length: tileSize),
+            Expanded(
+              child: Row(
+                children: [
+                  Expanded(child: tile(tiles[1])),
+                  _CollageDivider(vertical: true, length: tileSize / 2),
+                  Expanded(child: tile(tiles[2])),
+                ],
+              ),
+            ),
+          ],
+        );
+      default:
+        grid = Column(
+          children: [
+            Expanded(
+              child: Row(
+                children: [
+                  Expanded(child: tile(tiles[0])),
+                  _CollageDivider(vertical: true, length: tileSize / 2),
+                  Expanded(child: tile(tiles[1])),
+                ],
+              ),
+            ),
+            _CollageDivider(vertical: false, length: tileSize),
+            Expanded(
+              child: Row(
+                children: [
+                  Expanded(child: tile(tiles[2])),
+                  _CollageDivider(vertical: true, length: tileSize / 2),
+                  Expanded(child: tile(tiles[3])),
+                ],
+              ),
+            ),
+          ],
+        );
+    }
+
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        grid,
+        if (overflow > 0)
+          Positioned(
+            right: tileSize * 0.06,
+            bottom: tileSize * 0.06,
+            child: Container(
+              padding: EdgeInsets.symmetric(
+                horizontal: tileSize * 0.05,
+                vertical: tileSize * 0.02,
+              ),
+              decoration: BoxDecoration(
+                color: const Color.fromRGBO(0, 0, 0, 0.7),
+                borderRadius: BorderRadius.circular(tileSize * 0.08),
+              ),
+              child: Text(
+                '+$overflow',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: tileSize * 0.09,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _CollageDivider extends StatelessWidget {
+  const _CollageDivider({required this.vertical, required this.length});
+
+  final bool vertical;
+  final double length;
+
+  @override
+  Widget build(BuildContext context) {
+    const color = Color.fromRGBO(0, 0, 0, 0.55);
+    return vertical
+        ? SizedBox(width: length * 0.014, height: length, child: const ColoredBox(color: color))
+        : SizedBox(width: length, height: length * 0.014, child: const ColoredBox(color: color));
+  }
+}
+
 class _DashedAddCircle extends StatelessWidget {
-  const _DashedAddCircle({required this.onTap, required this.compact});
+  const _DashedAddCircle({
+    required this.onTap,
+    required this.compact,
+    required this.label,
+  });
 
   final VoidCallback? onTap;
   final bool compact;
+  final String label;
 
   @override
   Widget build(BuildContext context) {
@@ -1718,7 +2477,7 @@ class _DashedAddCircle extends StatelessWidget {
               child: Padding(
                 padding: EdgeInsets.all(10.w),
                 child: Text(
-                  '+ create\nnew group',
+                  label,
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     color: Colors.white,
@@ -1779,6 +2538,7 @@ class _CarouselItem {
     required this.availability,
     this.profilePhotoUrl,
     this.profilePhotoBase64,
+    this.members = const [],
   });
 
   factory _CarouselItem.group({
@@ -1787,6 +2547,7 @@ class _CarouselItem {
     required String? profilePhotoUrl,
     required String? profilePhotoBase64,
     required MemberAvailability availability,
+    List<GroupMemberSummary> members = const [],
   }) {
     return _CarouselItem(
       group: group,
@@ -1794,6 +2555,7 @@ class _CarouselItem {
       profilePhotoUrl: profilePhotoUrl,
       profilePhotoBase64: profilePhotoBase64,
       availability: availability,
+      members: members,
     );
   }
 
@@ -1802,6 +2564,11 @@ class _CarouselItem {
   final MemberAvailability availability;
   final String? profilePhotoUrl;
   final String? profilePhotoBase64;
+
+  /// Group members loaded for this group (only populated for the
+  /// currently-selected/focused group). Used to render a photo collage on
+  /// the connect circle so it's obvious at a glance who you're joining.
+  final List<GroupMemberSummary> members;
 }
 
 class _SetupLine extends StatelessWidget {

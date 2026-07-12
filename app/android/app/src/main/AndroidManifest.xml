@@ -15,7 +15,7 @@
         android:required="false" />
 
     <application
-        android:label="one_one_app"
+        android:label="One One"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
