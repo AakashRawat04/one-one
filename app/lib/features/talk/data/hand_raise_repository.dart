@@ -26,11 +26,7 @@ class HandRaiseRepository {
         'updatedAt': now,
       });
     } else {
-      await ref.set({
-        'raised': false,
-        'raisedAt': null,
-        'updatedAt': now,
-      });
+      await ref.remove();
     }
   }
 

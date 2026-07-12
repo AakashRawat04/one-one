@@ -110,6 +110,7 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
       unawaited(_talkRepository.stopTalk(activeTalk, reason: 'screen_closed'));
     }
     unawaited(_disconnectLiveKit());
+    unawaited(_clearOwnHandRaise());
     super.dispose();
   }
 
@@ -231,27 +232,50 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
     _handRaiseSubscription = _handRaiseRepository
         .raisesRef(groupId)
         .onValue
-        .listen((event) {
-          if (!mounted || _selectedGroup?.groupId != groupId) return;
-          final next = HandRaiseRepository.parseSnapshot(event.snapshot.value);
-          final previous = _handRaises;
-          final newlyRaised = next.entries.where(
-            (entry) =>
-                entry.value &&
-                entry.key != _session.userId &&
-                previous[entry.key] != true,
-          );
-
-          setState(() => _handRaises = next);
-
-          if (newlyRaised.isNotEmpty) {
-            unawaited(
-              TalkFeedback.remoteHandRaised(
-                hapticsEnabled: _session.settings.hapticsEnabled,
-              ),
+        .listen(
+          (event) {
+            if (!mounted || _selectedGroup?.groupId != groupId) return;
+            final next = HandRaiseRepository.parseSnapshot(event.snapshot.value);
+            final previous = _handRaises;
+            final newlyRaised = next.entries.where(
+              (entry) =>
+                  entry.value &&
+                  entry.key != _session.userId &&
+                  previous[entry.key] != true,
             );
-          }
-        });
+
+            setState(() => _handRaises = next);
+
+            if (newlyRaised.isNotEmpty) {
+              unawaited(
+                TalkFeedback.remoteHandRaised(
+                  hapticsEnabled: _session.settings.hapticsEnabled,
+                ),
+              );
+            }
+          },
+          onError: (Object error) {
+            debugPrint('Hand raise listener error: $error');
+            if (!mounted || _selectedGroup?.groupId != groupId) return;
+            setState(() => _message = "Couldn't sync hand raises.");
+          },
+        );
+  }
+
+  Future<void> _clearOwnHandRaise({String? groupId}) async {
+    final resolvedGroupId = groupId ?? _selectedGroup?.groupId;
+    if (resolvedGroupId == null || _handRaises[_session.userId] != true) {
+      return;
+    }
+
+    try {
+      await _handRaiseRepository.clearRaised(
+        groupId: resolvedGroupId,
+        userId: _session.userId,
+      );
+    } catch (_) {
+      // Best-effort cleanup when leaving or closing the screen.
+    }
   }
 
   void _scheduleAvailabilityExpiryRefresh() {
@@ -276,6 +300,11 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
   }
 
   Future<void> _selectGroup(String groupId) async {
+    final previousGroup = _selectedGroup;
+    if (previousGroup != null) {
+      await _clearOwnHandRaise(groupId: previousGroup.groupId);
+    }
+
     final group = _groups.firstWhere((item) => item.groupId == groupId);
     setState(() {
       _selectedGroup = group;
@@ -611,6 +640,7 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
       _heartbeatTimer = null;
       await _disconnectLiveKit();
       await _onlineRepository.goAway(session);
+      await _clearOwnHandRaise(groupId: session.groupId);
       if (!mounted) return;
       setState(() {
         _onlineSession = null;
@@ -732,10 +762,13 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
 
   Future<void> _toggleHandRaise() async {
     final group = _selectedGroup;
-    if (group == null || _handRaiseBusy) return;
+    if (group == null || _handRaiseBusy || !_isOnline) return;
 
     final nextRaised = _handRaises[_session.userId] != true;
-    setState(() => _handRaiseBusy = true);
+    setState(() {
+      _handRaiseBusy = true;
+      _handRaises = {..._handRaises, _session.userId: nextRaised};
+    });
     try {
       await _handRaiseRepository.setRaised(
         groupId: group.groupId,
@@ -750,7 +783,10 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
       );
     } catch (error) {
       if (!mounted) return;
-      setState(() => _message = 'Couldn’t update hand raise.');
+      setState(() {
+        _handRaises = {..._handRaises, _session.userId: !nextRaised};
+        _message = 'Couldn\u2019t update hand raise.';
+      });
     } finally {
       if (mounted) setState(() => _handRaiseBusy = false);
     }
@@ -1254,8 +1290,9 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
         fit: StackFit.expand,
         children: [
           _HomeBackdrop(
-            profilePhotoUrl: _session.user.profilePhotoUrl,
-            profilePhotoBase64: _session.user.profilePhotoBase64,
+            members: _members,
+            fallbackPhotoUrl: _session.user.profilePhotoUrl,
+            fallbackPhotoBase64: _session.user.profilePhotoBase64,
             accent: accent,
           ),
           SafeArea(
@@ -1303,6 +1340,7 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
                     isTalking: _state == 'talking',
                     handRaised: _handRaises[_session.userId] == true,
                     handRaiseBusy: _handRaiseBusy,
+                    handRaiseEnabled: _isOnline,
                     onHandRaise: _toggleHandRaise,
                     showReaction: _canSendInCallReaction,
                     reactionBusy: _reactionBusy,
@@ -1371,40 +1409,48 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
 
 class _HomeBackdrop extends StatelessWidget {
   const _HomeBackdrop({
-    required this.profilePhotoUrl,
-    required this.profilePhotoBase64,
+    required this.members,
+    required this.fallbackPhotoUrl,
+    required this.fallbackPhotoBase64,
     required this.accent,
   });
 
-  final String? profilePhotoUrl;
-  final String? profilePhotoBase64;
+  final List<GroupMemberSummary> members;
+  final String? fallbackPhotoUrl;
+  final String? fallbackPhotoBase64;
   final Color accent;
+
+  bool _memberHasPhoto(GroupMemberSummary member) {
+    return (member.profilePhotoUrl?.trim().isNotEmpty ?? false) ||
+        (member.profilePhotoBase64?.trim().isNotEmpty ?? false);
+  }
 
   @override
   Widget build(BuildContext context) {
-    final hasPhoto =
-        (profilePhotoUrl?.trim().isNotEmpty ?? false) ||
-        (profilePhotoBase64?.trim().isNotEmpty ?? false);
+    final hasMemberPhotos = members.any(_memberHasPhoto);
+    final hasFallbackPhoto =
+        (fallbackPhotoUrl?.trim().isNotEmpty ?? false) ||
+        (fallbackPhotoBase64?.trim().isNotEmpty ?? false);
+    final showCollage = members.isNotEmpty ? true : hasFallbackPhoto;
 
     return Stack(
       fit: StackFit.expand,
       children: [
         const ColoredBox(color: Colors.black),
-        if (hasPhoto)
+        if (showCollage)
           Opacity(
-            opacity: 0.5,
+            opacity: hasMemberPhotos || hasFallbackPhoto ? 0.35 : 0.2,
             child: ImageFiltered(
-              imageFilter: ImageFilter.blur(sigmaX: 32, sigmaY: 32),
+              imageFilter: ImageFilter.blur(sigmaX: 40, sigmaY: 40),
               child: FittedBox(
                 fit: BoxFit.cover,
                 child: SizedBox(
                   width: 400,
                   height: 800,
-                  child: ProfileAvatar(
-                    profilePhotoUrl: profilePhotoUrl,
-                    profilePhotoBase64: profilePhotoBase64,
-                    radius: 200,
-                    backgroundColor: Colors.black,
+                  child: _BackdropMemberCollage(
+                    members: members,
+                    fallbackPhotoUrl: fallbackPhotoUrl,
+                    fallbackPhotoBase64: fallbackPhotoBase64,
                   ),
                 ),
               ),
@@ -1416,9 +1462,9 @@ class _HomeBackdrop extends StatelessWidget {
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
               colors: [
-                Colors.black.withValues(alpha: 0.25),
-                Colors.black.withValues(alpha: 0.5),
-                Colors.black.withValues(alpha: 0.85),
+                Colors.black.withValues(alpha: 0.3),
+                Colors.black.withValues(alpha: 0.55),
+                Colors.black.withValues(alpha: 0.88),
                 Color.lerp(Colors.black, accent, 0.14)!,
               ],
               stops: const [0, 0.35, 0.72, 1],
@@ -1426,6 +1472,84 @@ class _HomeBackdrop extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// Full-bleed member photo grid for the blurred home backdrop.
+class _BackdropMemberCollage extends StatelessWidget {
+  const _BackdropMemberCollage({
+    required this.members,
+    required this.fallbackPhotoUrl,
+    required this.fallbackPhotoBase64,
+  });
+
+  static const int _maxTiles = 9;
+
+  final List<GroupMemberSummary> members;
+  final String? fallbackPhotoUrl;
+  final String? fallbackPhotoBase64;
+
+  int _columnsFor(int count) {
+    if (count <= 1) return 1;
+    if (count <= 4) return 2;
+    return 3;
+  }
+
+  Widget _tile(GroupMemberSummary member) {
+    final initial = member.displayName.trim().isEmpty
+        ? '?'
+        : member.displayName.trim().substring(0, 1).toUpperCase();
+    return ProfileImage(
+      profilePhotoUrl: member.profilePhotoUrl,
+      profilePhotoBase64: member.profilePhotoBase64,
+      backgroundColor: const Color(0xff1a1a1a),
+      fallback: Text(
+        initial,
+        style: const TextStyle(
+          color: Colors.white54,
+          fontSize: 48,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (members.isEmpty) {
+      return ProfileImage(
+        profilePhotoUrl: fallbackPhotoUrl,
+        profilePhotoBase64: fallbackPhotoBase64,
+        backgroundColor: const Color(0xff1a1a1a),
+        fallback: const Icon(
+          Icons.person_outline,
+          color: Colors.white38,
+          size: 120,
+        ),
+      );
+    }
+
+    final tiles = members.take(_maxTiles).toList(growable: false);
+    final columns = _columnsFor(tiles.length);
+    final rows = (tiles.length / columns).ceil();
+
+    return Column(
+      children: List.generate(rows, (row) {
+        return Expanded(
+          child: Row(
+            children: List.generate(columns, (column) {
+              final index = row * columns + column;
+              if (index >= tiles.length) {
+                return const Expanded(
+                  child: ColoredBox(color: Color(0xff141414)),
+                );
+              }
+              return Expanded(child: _tile(tiles[index]));
+            }),
+          ),
+        );
+      }),
     );
   }
 }
@@ -2024,6 +2148,7 @@ class _CarouselCaption extends StatelessWidget {
     required this.isTalking,
     required this.handRaised,
     required this.handRaiseBusy,
+    required this.handRaiseEnabled,
     required this.onHandRaise,
     required this.showReaction,
     required this.reactionBusy,
@@ -2037,6 +2162,7 @@ class _CarouselCaption extends StatelessWidget {
   final bool isTalking;
   final bool handRaised;
   final bool handRaiseBusy;
+  final bool handRaiseEnabled;
   final VoidCallback onHandRaise;
   final bool showReaction;
   final bool reactionBusy;
@@ -2105,14 +2231,14 @@ class _CarouselCaption extends StatelessWidget {
               ),
             if (isLive || isTalking) SizedBox(width: 8.w),
             Opacity(
-              opacity: handRaiseBusy ? 0.55 : 1,
+              opacity: handRaiseBusy || !handRaiseEnabled ? 0.45 : 1,
               child: Material(
                 color: handRaised
                     ? const Color(0xfffff1a8)
                     : const Color.fromRGBO(255, 255, 255, 0.14),
                 borderRadius: BorderRadius.circular(18.r),
                 child: InkWell(
-                  onTap: handRaiseBusy ? null : onHandRaise,
+                  onTap: handRaiseBusy || !handRaiseEnabled ? null : onHandRaise,
                   borderRadius: BorderRadius.circular(18.r),
                   child: Padding(
                     padding: EdgeInsets.symmetric(
