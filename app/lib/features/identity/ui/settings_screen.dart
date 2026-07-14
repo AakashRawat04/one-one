@@ -2,32 +2,29 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:image_picker/image_picker.dart';
 
 import '../../../app/accent_theme.dart';
 import '../data/identity_repository.dart';
 import '../models/identity_session.dart';
 import 'legal_document_screen.dart';
 import 'profile_avatar.dart';
+import 'profile_photo_editor.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({
     super.key,
     required this.session,
     required this.identityRepository,
-    required this.onSessionChanged,
   });
 
   final IdentitySession session;
   final IdentityRepository identityRepository;
-  final ValueChanged<IdentitySession> onSessionChanged;
 
   /// Opens settings with a dark fade/slide transition (no white flash).
   static Future<void> open(
     BuildContext context, {
     required IdentitySession session,
     required IdentityRepository identityRepository,
-    required ValueChanged<IdentitySession> onSessionChanged,
   }) {
     return Navigator.of(context).push<void>(
       PageRouteBuilder<void>(
@@ -43,7 +40,6 @@ class SettingsScreen extends StatefulWidget {
               child: SettingsScreen(
                 session: session,
                 identityRepository: identityRepository,
-                onSessionChanged: onSessionChanged,
               ),
             ),
           );
@@ -81,41 +77,92 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late String _persistedAccentColorKey = _session.settings.accentColorKey;
   bool _saving = false;
   bool _photoSaving = false;
+  bool _googleSigningIn = false;
   bool _hasUnsavedAccentPreview = false;
   String? _message;
-  final ImagePicker _imagePicker = ImagePicker();
+
+  @override
+  void initState() {
+    super.initState();
+    final currentSession = widget.identityRepository.currentSession;
+    if (currentSession != null && currentSession.userId == _session.userId) {
+      _session = currentSession;
+      _accentColorKey = currentSession.settings.accentColorKey;
+      _hapticsEnabled = currentSession.settings.hapticsEnabled;
+      _audioOutputPreference = currentSession.settings.audioOutputPreference;
+      _persistedAccentColorKey = currentSession.settings.accentColorKey;
+    }
+    widget.identityRepository.sessionListenable.addListener(
+      _onRepositorySessionChanged,
+    );
+  }
 
   @override
   void dispose() {
+    widget.identityRepository.sessionListenable.removeListener(
+      _onRepositorySessionChanged,
+    );
     if (_hasUnsavedAccentPreview) {
       AccentThemeController.setAccentKey(_persistedAccentColorKey);
     }
     super.dispose();
   }
 
+  void _onRepositorySessionChanged() {
+    final session = widget.identityRepository.currentSession;
+    if (!mounted || session == null || session.userId != _session.userId) {
+      return;
+    }
+    setState(() {
+      _session = session;
+      _hapticsEnabled = session.settings.hapticsEnabled;
+      _audioOutputPreference = session.settings.audioOutputPreference;
+    });
+  }
+
   void _acceptSession(IdentitySession session) {
     _session = session;
-    widget.onSessionChanged(session);
   }
 
   Future<void> _changeProfilePhoto() async {
     if (_saving || _photoSaving) return;
-
-    final pickedFile = await _imagePicker.pickImage(
-      source: ImageSource.gallery,
-      imageQuality: 82,
-      maxWidth: 1600,
-    );
-    if (pickedFile == null) return;
-
-    final bytes = await pickedFile.readAsBytes();
-    if (!mounted) return;
-    setState(() {
-      _photoSaving = true;
-      _message = null;
-    });
-
     try {
+      final currentUrl = _session.user.profilePhotoUrl?.trim();
+      var recropCurrent = false;
+      if (currentUrl != null && currentUrl.isNotEmpty) {
+        final choice = await showModalBottomSheet<String>(
+          context: context,
+          backgroundColor: const Color(0xff1b1b1b),
+          showDragHandle: true,
+          builder: (context) => SafeArea(
+            child: Wrap(
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.photo_library_outlined),
+                  title: const Text('Choose a new photo'),
+                  onTap: () => Navigator.pop(context, 'new'),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.crop_outlined),
+                  title: const Text('Re-crop current photo'),
+                  onTap: () => Navigator.pop(context, 'recrop'),
+                ),
+              ],
+            ),
+          ),
+        );
+        if (choice == null || !mounted) return;
+        recropCurrent = choice == 'recrop';
+      }
+      final bytes = await _openProfilePhotoEditor(
+        recropCurrent: recropCurrent,
+        currentUrl: currentUrl,
+      );
+      if (bytes == null || !mounted) return;
+      setState(() {
+        _photoSaving = true;
+        _message = null;
+      });
       final session = await widget.identityRepository.updateProfilePhoto(bytes);
       if (!mounted) return;
       setState(() {
@@ -128,6 +175,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
     } finally {
       if (mounted) setState(() => _photoSaving = false);
     }
+  }
+
+  Future<Uint8List?> _openProfilePhotoEditor({
+    required bool recropCurrent,
+    required String? currentUrl,
+  }) {
+    if (recropCurrent) {
+      return ProfilePhotoEditor.recropNetworkPhoto(context, currentUrl!);
+    }
+    return ProfilePhotoEditor.pickAndCrop(context);
   }
 
   Future<void> _openProfileEditor() async {
@@ -247,6 +304,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  Future<void> _setAudioOutputPreference(String value) async {
+    final previous = _audioOutputPreference;
+    setState(() => _audioOutputPreference = value);
+    try {
+      final session = await widget.identityRepository.updateSettings(
+        accentColorKey: _accentColorKey,
+        hapticsEnabled: _hapticsEnabled,
+        audioOutputPreference: value,
+      );
+      if (!mounted) return;
+      setState(() => _acceptSession(session));
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _audioOutputPreference = previous;
+        _message = 'Couldn\'t update audio output.';
+      });
+    }
+  }
+
   Future<void> _saveSettings() async {
     setState(() {
       _saving = true;
@@ -272,6 +349,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
       setState(() => _message = error.toString());
     } finally {
       if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _connectGoogleAccount() async {
+    if (_googleSigningIn) return;
+    setState(() {
+      _googleSigningIn = true;
+      _message = null;
+    });
+    try {
+      await widget.identityRepository.signInWithGoogle();
+      final session = await widget.identityRepository.ensureIdentity();
+      if (!mounted) return;
+      setState(() {
+        _acceptSession(session);
+        _message = 'Google account connected';
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _message = error.toString());
+    } finally {
+      if (mounted) setState(() => _googleSigningIn = false);
     }
   }
 
@@ -305,190 +404,226 @@ class _SettingsScreenState extends State<SettingsScreen> {
           child: ListView(
             padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
             children: [
-            _ProfileHeader(
-              session: _session,
-              accent: accent,
-              photoSaving: _photoSaving,
-              enabled: !_saving && !_photoSaving,
-              onChangePhoto: _changeProfilePhoto,
-              onEditProfile: _openProfileEditor,
-            ),
-            const SizedBox(height: 30),
-            const _SectionTitle('Preferences'),
-            const SizedBox(height: 12),
-            _SettingsSurface(
-              children: [
-                _PreferenceHeading(
-                  icon: Icons.palette_outlined,
-                  title: 'Accent color',
-                  subtitle: 'Choose the color used across One One.',
-                ),
-                const SizedBox(height: 16),
-                Wrap(
-                  spacing: 12,
-                  runSpacing: 12,
-                  children: [
-                    for (final option in accentOptions)
-                      _ColorSwatch(
-                        option: option,
-                        selected: _accentColorKey == option.key,
-                        enabled: !_saving,
-                        onSelected: () {
-                          setState(() {
-                            _accentColorKey = option.key;
-                            _hasUnsavedAccentPreview =
-                                option.key != _persistedAccentColorKey;
-                          });
-                          AccentThemeController.setAccentKey(option.key);
-                        },
+              _ProfileHeader(
+                session: _session,
+                accent: accent,
+                photoSaving: _photoSaving,
+                enabled: !_saving && !_photoSaving,
+                onChangePhoto: _changeProfilePhoto,
+                onEditProfile: _openProfileEditor,
+              ),
+              const SizedBox(height: 30),
+              const _SectionTitle('Preferences'),
+              const SizedBox(height: 12),
+              _SettingsSurface(
+                children: [
+                  _PreferenceHeading(
+                    icon: Icons.palette_outlined,
+                    title: 'Accent color',
+                    subtitle: 'Choose the color used across One One.',
+                  ),
+                  const SizedBox(height: 16),
+                  Wrap(
+                    spacing: 12,
+                    runSpacing: 12,
+                    children: [
+                      for (final option in accentOptions)
+                        _ColorSwatch(
+                          option: option,
+                          selected: _accentColorKey == option.key,
+                          enabled: !_saving,
+                          onSelected: () {
+                            setState(() {
+                              _accentColorKey = option.key;
+                              _hasUnsavedAccentPreview =
+                                  option.key != _persistedAccentColorKey;
+                            });
+                            AccentThemeController.setAccentKey(option.key);
+                          },
+                        ),
+                    ],
+                  ),
+                  const _SurfaceDivider(),
+                  SwitchListTile.adaptive(
+                    contentPadding: EdgeInsets.zero,
+                    secondary: const Icon(
+                      Icons.vibration_outlined,
+                      color: Colors.white70,
+                    ),
+                    title: const Text(
+                      'Haptics',
+                      style: TextStyle(color: Colors.white),
+                    ),
+                    subtitle: const Text(
+                      'A short vibration when talking starts or stops.',
+                      style: TextStyle(color: Colors.white54),
+                    ),
+                    value: _hapticsEnabled,
+                    activeTrackColor: accent,
+                    onChanged: _saving
+                        ? null
+                        : (value) => unawaited(_setHapticsEnabled(value)),
+                  ),
+                  const _SurfaceDivider(),
+                  const _PreferenceHeading(
+                    icon: Icons.spatial_audio_off_outlined,
+                    title: 'Audio output',
+                    subtitle: 'Where incoming voice should play.',
+                  ),
+                  const SizedBox(height: 14),
+                  SizedBox(
+                    width: double.infinity,
+                    child: SegmentedButton<String>(
+                      style: ButtonStyle(
+                        foregroundColor: WidgetStateProperty.resolveWith(
+                          (states) => states.contains(WidgetState.selected)
+                              ? Colors.black
+                              : Colors.white70,
+                        ),
+                        backgroundColor: WidgetStateProperty.resolveWith(
+                          (states) => states.contains(WidgetState.selected)
+                              ? accent
+                              : Colors.transparent,
+                        ),
                       ),
+                      segments: const [
+                        ButtonSegment(
+                          value: 'speaker',
+                          icon: Icon(Icons.volume_up_outlined),
+                          label: Text('Speaker'),
+                        ),
+                        ButtonSegment(
+                          value: 'earpiece',
+                          icon: Icon(Icons.phone_in_talk_outlined),
+                          label: Text('Phone'),
+                        ),
+                      ],
+                      selected: {_audioOutputPreference},
+                      onSelectionChanged: _saving
+                          ? null
+                          : (selection) => unawaited(
+                              _setAudioOutputPreference(selection.first),
+                            ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 28),
+              if (_session.user.authProvider == 'anonymous') ...[
+                const _SectionTitle('Account'),
+                const SizedBox(height: 12),
+                _SettingsSurface(
+                  children: [
+                    const _PreferenceHeading(
+                      icon: Icons.account_circle_outlined,
+                      title: 'Google account',
+                      subtitle:
+                          'Keep your One One identity with Google sign-in.',
+                    ),
+                    const SizedBox(height: 16),
+                    OutlinedButton.icon(
+                      onPressed: _googleSigningIn
+                          ? null
+                          : _connectGoogleAccount,
+                      style: OutlinedButton.styleFrom(
+                        minimumSize: const Size.fromHeight(50),
+                        foregroundColor: Colors.white,
+                        side: const BorderSide(color: Colors.white24),
+                      ),
+                      icon: _googleSigningIn
+                          ? const SizedBox.square(
+                              dimension: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Text(
+                              'G',
+                              style: TextStyle(fontWeight: FontWeight.w800),
+                            ),
+                      label: const Text('Sign in with Google'),
+                    ),
                   ],
                 ),
-                const _SurfaceDivider(),
-                SwitchListTile.adaptive(
-                  contentPadding: EdgeInsets.zero,
-                  secondary: const Icon(
-                    Icons.vibration_outlined,
-                    color: Colors.white70,
+                const SizedBox(height: 28),
+              ],
+              const _SectionTitle('Background reliability'),
+              const SizedBox(height: 12),
+              _SettingsSurface(
+                children: [
+                  _ChecklistItem(
+                    ok: _session.device.micPermissionGranted,
+                    label: 'Microphone permission',
+                    detail: _session.device.micPermissionGranted
+                        ? 'Ready'
+                        : 'Required before you can talk.',
                   ),
-                  title: const Text(
-                    'Haptics',
-                    style: TextStyle(color: Colors.white),
+                  _ChecklistItem(
+                    ok: _session.device.notificationPermissionGranted,
+                    label: 'Notification permission',
+                    detail: _session.device.notificationPermissionGranted
+                        ? 'Ready for background activity'
+                        : 'Required for reliable background activity.',
                   ),
-                  subtitle: const Text(
-                    'A short vibration when talking starts or stops.',
-                    style: TextStyle(color: Colors.white54),
+                  _ChecklistItem(
+                    ok: _session.device.batteryOptimizationIgnored,
+                    label: 'Battery optimization',
+                    detail: _session.device.batteryOptimizationIgnored
+                        ? 'Unrestricted'
+                        : 'Your device may interrupt long sessions.',
                   ),
-                  value: _hapticsEnabled,
-                  activeTrackColor: accent,
-                  onChanged: _saving
-                      ? null
-                      : (value) => unawaited(_setHapticsEnabled(value)),
+                  const _ChecklistItem(
+                    ok: false,
+                    label: 'Closed-app receive',
+                    detail: 'Keep One One open while testing voice.',
+                    showDivider: false,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 28),
+              const _SectionTitle('Legal'),
+              const SizedBox(height: 12),
+              _SettingsSurface(
+                padding: EdgeInsets.zero,
+                children: [
+                  _NavigationRow(
+                    icon: Icons.description_outlined,
+                    label: 'Terms & Conditions',
+                    onTap: () => _openLegalDocument(LegalDocument.terms),
+                  ),
+                  const _SurfaceDivider(indent: 52),
+                  _NavigationRow(
+                    icon: Icons.privacy_tip_outlined,
+                    label: 'Privacy Policy',
+                    onTap: () => _openLegalDocument(LegalDocument.privacy),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 24),
+              FilledButton.icon(
+                onPressed: _saving ? null : _saveSettings,
+                style: FilledButton.styleFrom(
+                  minimumSize: const Size.fromHeight(54),
+                  backgroundColor: accent,
+                  foregroundColor: Colors.black,
                 ),
-                const _SurfaceDivider(),
-                const _PreferenceHeading(
-                  icon: Icons.spatial_audio_off_outlined,
-                  title: 'Audio output',
-                  subtitle: 'Where incoming voice should play.',
-                ),
+                icon: _saving
+                    ? const SizedBox.square(
+                        dimension: 19,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.black,
+                        ),
+                      )
+                    : const Icon(Icons.check_rounded),
+                label: const Text('Save settings'),
+              ),
+              if (_message != null) ...[
                 const SizedBox(height: 14),
-                SizedBox(
-                  width: double.infinity,
-                  child: SegmentedButton<String>(
-                    style: ButtonStyle(
-                      foregroundColor: WidgetStateProperty.resolveWith(
-                        (states) => states.contains(WidgetState.selected)
-                            ? Colors.black
-                            : Colors.white70,
-                      ),
-                      backgroundColor: WidgetStateProperty.resolveWith(
-                        (states) => states.contains(WidgetState.selected)
-                            ? accent
-                            : Colors.transparent,
-                      ),
-                    ),
-                    segments: const [
-                      ButtonSegment(
-                        value: 'speaker',
-                        icon: Icon(Icons.volume_up_outlined),
-                        label: Text('Speaker'),
-                      ),
-                      ButtonSegment(
-                        value: 'earpiece',
-                        icon: Icon(Icons.phone_in_talk_outlined),
-                        label: Text('Phone'),
-                      ),
-                    ],
-                    selected: {_audioOutputPreference},
-                    onSelectionChanged: _saving
-                        ? null
-                        : (selection) => setState(
-                            () => _audioOutputPreference = selection.first,
-                          ),
-                  ),
+                Text(
+                  _message!,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.white70),
                 ),
               ],
-            ),
-            const SizedBox(height: 28),
-            const _SectionTitle('Background reliability'),
-            const SizedBox(height: 12),
-            _SettingsSurface(
-              children: [
-                _ChecklistItem(
-                  ok: _session.device.micPermissionGranted,
-                  label: 'Microphone permission',
-                  detail: _session.device.micPermissionGranted
-                      ? 'Ready'
-                      : 'Required before you can talk.',
-                ),
-                _ChecklistItem(
-                  ok: _session.device.notificationPermissionGranted,
-                  label: 'Notification permission',
-                  detail: _session.device.notificationPermissionGranted
-                      ? 'Ready for background activity'
-                      : 'Required for reliable background activity.',
-                ),
-                _ChecklistItem(
-                  ok: _session.device.batteryOptimizationIgnored,
-                  label: 'Battery optimization',
-                  detail: _session.device.batteryOptimizationIgnored
-                      ? 'Unrestricted'
-                      : 'Your device may interrupt long sessions.',
-                ),
-                const _ChecklistItem(
-                  ok: false,
-                  label: 'Closed-app receive',
-                  detail: 'Keep One One open while testing voice.',
-                  showDivider: false,
-                ),
-              ],
-            ),
-            const SizedBox(height: 28),
-            const _SectionTitle('Legal'),
-            const SizedBox(height: 12),
-            _SettingsSurface(
-              padding: EdgeInsets.zero,
-              children: [
-                _NavigationRow(
-                  icon: Icons.description_outlined,
-                  label: 'Terms & Conditions',
-                  onTap: () => _openLegalDocument(LegalDocument.terms),
-                ),
-                const _SurfaceDivider(indent: 52),
-                _NavigationRow(
-                  icon: Icons.privacy_tip_outlined,
-                  label: 'Privacy Policy',
-                  onTap: () => _openLegalDocument(LegalDocument.privacy),
-                ),
-              ],
-            ),
-            const SizedBox(height: 24),
-            FilledButton.icon(
-              onPressed: _saving ? null : _saveSettings,
-              style: FilledButton.styleFrom(
-                minimumSize: const Size.fromHeight(54),
-                backgroundColor: accent,
-                foregroundColor: Colors.black,
-              ),
-              icon: _saving
-                  ? const SizedBox.square(
-                      dimension: 19,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.black,
-                      ),
-                    )
-                  : const Icon(Icons.check_rounded),
-              label: const Text('Save settings'),
-            ),
-            if (_message != null) ...[
-              const SizedBox(height: 14),
-              Text(
-                _message!,
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: Colors.white70),
-              ),
-            ],
             ],
           ),
         ),

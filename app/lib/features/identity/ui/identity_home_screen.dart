@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:ui';
 
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -53,7 +54,7 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
   final TalkRepository _talkRepository = TalkRepository();
   final HandRaiseRepository _handRaiseRepository = HandRaiseRepository();
 
-  late IdentitySession _session = widget.initialSession;
+  late IdentitySession _session;
   List<GroupSummary> _groups = const [];
   List<GroupMemberSummary> _members = const [];
   Map<String, MemberAvailability> _availability = const {};
@@ -64,6 +65,7 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
   Timer? _availabilityExpiryTimer;
   StreamSubscription<DatabaseEvent>? _membersSubscription;
   StreamSubscription<DatabaseEvent>? _handRaiseSubscription;
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
 
   OnlineSession? _onlineSession;
   TalkSession? _talkSession;
@@ -88,21 +90,32 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
   Map<String, ConnectionQuality> _remoteConnectionQualityByUserId = const {};
   List<InCallReaction> _floatingReactions = const [];
   final Map<String, Timer> _reactionDismissTimers = {};
+  List<ConnectivityResult> _connectivity = const [];
 
   @override
   void initState() {
     super.initState();
+    _session =
+        widget.identityRepository.currentSession ?? widget.initialSession;
+    widget.identityRepository.sessionListenable.addListener(
+      _onIdentitySessionChanged,
+    );
     AccentThemeController.setAccentKey(_session.settings.accentColorKey);
+    unawaited(_startConnectivityMonitoring());
     unawaited(_loadGroups());
   }
 
   @override
   void dispose() {
+    widget.identityRepository.sessionListenable.removeListener(
+      _onIdentitySessionChanged,
+    );
     _carouselController.dispose();
     _availabilitySubscription?.cancel();
     _availabilityExpiryTimer?.cancel();
     _membersSubscription?.cancel();
     _handRaiseSubscription?.cancel();
+    _connectivitySubscription?.cancel();
     _heartbeatTimer?.cancel();
     _clearFloatingReactions();
     final activeTalk = _talkSession;
@@ -112,6 +125,32 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
     unawaited(_disconnectLiveKit());
     unawaited(_clearOwnHandRaise());
     super.dispose();
+  }
+
+  void _onIdentitySessionChanged() {
+    final next = widget.identityRepository.currentSession;
+    if (!mounted || next == null || next.userId != _session.userId) return;
+    final audioRouteChanged =
+        next.settings.audioOutputPreference !=
+        _session.settings.audioOutputPreference;
+    setState(() => _session = next);
+    AccentThemeController.setAccentKey(next.settings.accentColorKey);
+    if (audioRouteChanged) unawaited(_applyPreferredAudioRoute());
+  }
+
+  Future<void> _startConnectivityMonitoring() async {
+    final connectivity = Connectivity();
+    try {
+      final current = await connectivity.checkConnectivity();
+      if (mounted) setState(() => _connectivity = current);
+    } catch (_) {
+      // LiveKit connection quality remains the primary signal.
+    }
+    _connectivitySubscription = connectivity.onConnectivityChanged.listen((
+      results,
+    ) {
+      if (mounted) setState(() => _connectivity = results);
+    });
   }
 
   Future<void> _loadGroups() async {
@@ -235,7 +274,9 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
         .listen(
           (event) {
             if (!mounted || _selectedGroup?.groupId != groupId) return;
-            final next = HandRaiseRepository.parseSnapshot(event.snapshot.value);
+            final next = HandRaiseRepository.parseSnapshot(
+              event.snapshot.value,
+            );
             final previous = _handRaises;
             final newlyRaised = next.entries.where(
               (entry) =>
@@ -792,20 +833,31 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
     }
   }
 
-  bool get _someoneElseTalking {
-    return _friends.any((friend) {
+  int get _onlineParticipantCount {
+    final onlineUserIds = <String>{if (_isOnline) _session.userId};
+    for (final friend in _friends) {
       final availability = _availability[friend.userId];
-      return availability?.isTalking == true ||
-          _speakingUserIds.contains(friend.userId);
-    });
+      if (availability?.isLive == true ||
+          _speakingUserIds.contains(friend.userId)) {
+        onlineUserIds.add(friend.userId);
+      }
+    }
+    for (final participant
+        in _room?.remoteParticipants.values ?? const <RemoteParticipant>[]) {
+      final userId =
+          LiveKitStatus.userIdFromIdentity(participant.identity) ??
+          _participantUserIdFromIdentity(participant.identity);
+      if (userId != null) onlineUserIds.add(userId);
+    }
+    return onlineUserIds.length;
   }
 
-  /// Listeners can drop emoji/short text while someone else holds the mic.
+  /// Emoji/short text is available whenever at least two members are online.
   bool get _canSendInCallReaction {
     return _isOnline &&
         _room?.localParticipant != null &&
         _talkSession == null &&
-        _someoneElseTalking;
+        _onlineParticipantCount > 1;
   }
 
   Future<void> _openReactionComposer() async {
@@ -943,12 +995,42 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
         .timeout(const Duration(seconds: 8));
   }
 
+  Future<void> _applyPreferredAudioRoute() async {
+    final room = _room;
+    if (room == null) return;
+    final preference =
+        widget
+            .identityRepository
+            .currentSession
+            ?.settings
+            .audioOutputPreference ??
+        _session.settings.audioOutputPreference;
+    try {
+      await room.setSpeakerOn(preference != 'earpiece');
+    } catch (_) {
+      // Route changes are best effort on devices without a separate earpiece.
+    }
+  }
+
+  bool get _liveHapticsEnabled {
+    return widget.identityRepository.currentSession?.settings.hapticsEnabled ??
+        _session.settings.hapticsEnabled;
+  }
+
+  Future<void> _handleRemoteSpeakerStarted() async {
+    await TalkFeedback.remoteSpeakerStarted(
+      hapticsEnabled: _liveHapticsEnabled,
+    );
+    // Some audio-feedback implementations briefly alter the platform audio
+    // session. Reassert the user's route after the tone completes.
+    await _applyPreferredAudioRoute();
+  }
+
   String? _participantUserIdFromIdentity(String identity) {
     final parts = identity.split(':');
     if (parts.length < 3) return null;
     return parts[1];
   }
-
 
   ConnectionQuality _mergeConnectionQuality(
     ConnectionQuality? existing,
@@ -984,8 +1066,7 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
 
     setState(() {
       _localConnectionQuality =
-          room.localParticipant?.connectionQuality ??
-          ConnectionQuality.unknown;
+          room.localParticipant?.connectionQuality ?? ConnectionQuality.unknown;
       _remoteConnectionQualityByUserId = remotes;
     });
   }
@@ -1059,6 +1140,9 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
         // Subscription is an implementation detail — keep UI status clean.
       })
       ..on<ActiveSpeakersChangedEvent>((event) {
+        final previousRemoteSpeakers = _speakingUserIds.where(
+          (id) => id != _session.userId,
+        );
         final speaking = <String>{};
         for (final speaker in event.speakers) {
           final userId =
@@ -1067,6 +1151,15 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
           if (userId != null) speaking.add(userId);
         }
         if (!mounted) return;
+        final newlySpeakingRemote = speaking
+            .where((id) => id != _session.userId)
+            .any((id) => !previousRemoteSpeakers.contains(id));
+        if (newlySpeakingRemote && _talkSession != null) {
+          unawaited(_handleRemoteSpeakerStarted());
+        } else if (speaking.any((id) => id != _session.userId)) {
+          // Never let active-speaker auto-routing override the stored choice.
+          unawaited(_applyPreferredAudioRoute());
+        }
         setState(() {
           _speakingUserIds = speaking;
           final remoteSpeaking = speaking.any((id) => id != _session.userId);
@@ -1160,9 +1253,6 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
         context,
         session: _session,
         identityRepository: widget.identityRepository,
-        onSessionChanged: (session) {
-          setState(() => _session = session);
-        },
       ),
     );
   }
@@ -1247,6 +1337,34 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
         .toList(growable: false);
   }
 
+  List<GroupMemberSummary> get _displayMembers {
+    return _members
+        .map((member) {
+          if (member.userId != _session.userId) return member;
+          return GroupMemberSummary(
+            userId: member.userId,
+            displayName: _session.user.displayName,
+            role: member.role,
+            memberState: member.memberState,
+            profilePhotoUrl: _session.user.profilePhotoUrl,
+            profilePhotoBase64: _session.user.profilePhotoBase64,
+          );
+        })
+        .toList(growable: false);
+  }
+
+  ConnectionQuality get _effectiveLocalConnectionQuality {
+    if (_connectivity.contains(ConnectivityResult.none)) {
+      return ConnectionQuality.lost;
+    }
+    if (_localConnectionQuality != ConnectionQuality.unknown) {
+      return _localConnectionQuality;
+    }
+    return _connectivity.isEmpty
+        ? ConnectionQuality.unknown
+        : ConnectionQuality.good;
+  }
+
   List<_CarouselItem> get _carouselItems {
     final selfIsLive = _isOnline && (_state == 'live' || _state == 'talking');
     final selfAvailability = _isOnline
@@ -1267,7 +1385,9 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
           availability: group.groupId == _selectedGroup?.groupId
               ? selfAvailability
               : MemberAvailability.away,
-          members: group.groupId == _selectedGroup?.groupId ? _members : const [],
+          members: group.groupId == _selectedGroup?.groupId
+              ? _displayMembers
+              : const [],
         ),
     ];
   }
@@ -1290,7 +1410,7 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
         fit: StackFit.expand,
         children: [
           _HomeBackdrop(
-            members: _members,
+            members: _displayMembers,
             fallbackPhotoUrl: _session.user.profilePhotoUrl,
             fallbackPhotoBase64: _session.user.profilePhotoBase64,
             accent: accent,
@@ -1307,7 +1427,7 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
                   enabled: _serviceReady,
                   onTogglePresence: _togglePresence,
                   showNetworkStrength: _isOnline,
-                  localConnectionQuality: _localConnectionQuality,
+                  localConnectionQuality: _effectiveLocalConnectionQuality,
                   statusLabel: _presenceStatusLabel,
                 ),
                 SizedBox(height: 8.h),
@@ -1336,7 +1456,6 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
                 if (focusedGroup != null)
                   _CarouselCaption(
                     displayName: _session.user.displayName,
-                    isLive: live,
                     isTalking: _state == 'talking',
                     handRaised: _handRaises[_session.userId] == true,
                     handRaiseBusy: _handRaiseBusy,
@@ -1604,8 +1723,9 @@ class _TopChrome extends StatelessWidget {
                     clipBehavior: Clip.none,
                     children: [
                       _GlassIconButton(
-                        tooltip:
-                            hasSetupWarnings ? 'Settings / Setup' : 'Settings',
+                        tooltip: hasSetupWarnings
+                            ? 'Settings / Setup'
+                            : 'Settings',
                         icon: Icons.settings_outlined,
                         onPressed: onSettings,
                         onLongPress: onSetup,
@@ -2068,35 +2188,29 @@ class _NetworkStrengthIndicator extends StatelessWidget {
 
     return Tooltip(
       message: tooltip,
-      child: Container(
-        width: 36.w,
-        height: 36.w,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: const Color.fromRGBO(0, 0, 0, 0.35),
-          border: Border.all(
-            color: const Color.fromRGBO(255, 255, 255, 0.18),
-          ),
-        ),
-        child: quality == ConnectionQuality.lost
-            ? Icon(Icons.signal_cellular_off, color: color, size: 18.sp)
-            : Row(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  for (var bar = 0; bar < 4; bar++)
-                    Container(
-                      width: 3.w,
-                      height: (6 + bar * 3).h,
-                      margin: EdgeInsets.only(right: bar == 3 ? 0 : 1.5.w),
-                      decoration: BoxDecoration(
-                        color: bar < activeBars ? color : Colors.white24,
-                        borderRadius: BorderRadius.circular(1.r),
+      child: SizedBox(
+        width: 26.w,
+        height: 30.w,
+        child: Center(
+          child: quality == ConnectionQuality.lost
+              ? Icon(Icons.signal_cellular_off, color: color, size: 18.sp)
+              : Row(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    for (var bar = 0; bar < 4; bar++)
+                      Container(
+                        width: 3.w,
+                        height: (6 + bar * 3).h,
+                        margin: EdgeInsets.only(right: bar == 3 ? 0 : 1.5.w),
+                        decoration: BoxDecoration(
+                          color: bar < activeBars ? color : Colors.white24,
+                          borderRadius: BorderRadius.circular(1.r),
+                        ),
                       ),
-                    ),
-                ],
-              ),
+                  ],
+                ),
+        ),
       ),
     );
   }
@@ -2144,7 +2258,6 @@ class _AddFriendChip extends StatelessWidget {
 class _CarouselCaption extends StatelessWidget {
   const _CarouselCaption({
     required this.displayName,
-    required this.isLive,
     required this.isTalking,
     required this.handRaised,
     required this.handRaiseBusy,
@@ -2158,7 +2271,6 @@ class _CarouselCaption extends StatelessWidget {
   });
 
   final String displayName;
-  final bool isLive;
   final bool isTalking;
   final bool handRaised;
   final bool handRaiseBusy;
@@ -2210,87 +2322,101 @@ class _CarouselCaption extends StatelessWidget {
           ),
         ),
         SizedBox(height: 10.h),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            if (isLive || isTalking)
-              Container(
-                padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 7.h),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(18.r),
-                ),
-                child: Text(
-                  isTalking ? '🎙️ talking!' : '👀 is here!',
-                  style: TextStyle(
-                    color: Colors.black,
-                    fontSize: 13.sp,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-            if (isLive || isTalking) SizedBox(width: 8.w),
-            Opacity(
-              opacity: handRaiseBusy || !handRaiseEnabled ? 0.45 : 1,
-              child: Material(
-                color: handRaised
-                    ? const Color(0xfffff1a8)
-                    : const Color.fromRGBO(255, 255, 255, 0.14),
-                borderRadius: BorderRadius.circular(18.r),
-                child: InkWell(
-                  onTap: handRaiseBusy || !handRaiseEnabled ? null : onHandRaise,
-                  borderRadius: BorderRadius.circular(18.r),
-                  child: Padding(
+        SizedBox(
+          width: 330.w,
+          height: 38.h,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              if (isTalking)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Container(
                     padding: EdgeInsets.symmetric(
-                      horizontal: 12.w,
+                      horizontal: 14.w,
                       vertical: 7.h,
                     ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text('✋', style: TextStyle(fontSize: 13.sp)),
-                        SizedBox(width: 6.w),
-                        Text(
-                          handRaised ? 'Hand raised' : 'Raise hand',
-                          style: TextStyle(
-                            color: handRaised ? Colors.black : Colors.white,
-                            fontSize: 13.sp,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ],
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(18.r),
+                    ),
+                    child: Text(
+                      '🎙️ talking!',
+                      style: TextStyle(
+                        color: Colors.black,
+                        fontSize: 13.sp,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                   ),
                 ),
-              ),
-            ),
-            if (showReaction) ...[
-              SizedBox(width: 8.w),
-              Opacity(
-                opacity: reactionBusy ? 0.55 : 1,
-                child: Tooltip(
-                  message: 'Send a reaction',
+              Center(
+                child: Opacity(
+                  opacity: handRaiseBusy || !handRaiseEnabled ? 0.45 : 1,
                   child: Material(
-                    color: const Color.fromRGBO(255, 255, 255, 0.14),
-                    shape: const CircleBorder(),
+                    color: handRaised
+                        ? const Color(0xfffff1a8)
+                        : const Color.fromRGBO(255, 255, 255, 0.14),
+                    borderRadius: BorderRadius.circular(18.r),
                     child: InkWell(
-                      onTap: reactionBusy ? null : onReaction,
-                      customBorder: const CircleBorder(),
-                      child: SizedBox(
-                        width: 38.w,
-                        height: 38.w,
-                        child: Icon(
-                          Icons.keyboard_rounded,
-                          color: Colors.white,
-                          size: 20.sp,
+                      onTap: handRaiseBusy || !handRaiseEnabled
+                          ? null
+                          : onHandRaise,
+                      borderRadius: BorderRadius.circular(18.r),
+                      child: Padding(
+                        padding: EdgeInsets.symmetric(
+                          horizontal: 12.w,
+                          vertical: 7.h,
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text('✋', style: TextStyle(fontSize: 13.sp)),
+                            SizedBox(width: 6.w),
+                            Text(
+                              handRaised ? 'Hand raised' : 'Raise hand',
+                              style: TextStyle(
+                                color: handRaised ? Colors.black : Colors.white,
+                                fontSize: 13.sp,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ),
                   ),
                 ),
               ),
+              if (showReaction)
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: Opacity(
+                    opacity: reactionBusy ? 0.55 : 1,
+                    child: Tooltip(
+                      message: 'Send a reaction',
+                      child: Material(
+                        color: const Color.fromRGBO(255, 255, 255, 0.14),
+                        shape: const CircleBorder(),
+                        child: InkWell(
+                          onTap: reactionBusy ? null : onReaction,
+                          customBorder: const CircleBorder(),
+                          child: SizedBox(
+                            width: 38.w,
+                            height: 38.w,
+                            child: Icon(
+                              Icons.keyboard_rounded,
+                              color: Colors.white,
+                              size: 20.sp,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
             ],
-          ],
+          ),
         ),
       ],
     );
@@ -2705,8 +2831,16 @@ class _CollageDivider extends StatelessWidget {
   Widget build(BuildContext context) {
     const color = Color.fromRGBO(0, 0, 0, 0.55);
     return vertical
-        ? SizedBox(width: length * 0.014, height: length, child: const ColoredBox(color: color))
-        : SizedBox(width: length, height: length * 0.014, child: const ColoredBox(color: color));
+        ? SizedBox(
+            width: length * 0.014,
+            height: length,
+            child: const ColoredBox(color: color),
+          )
+        : SizedBox(
+            width: length,
+            height: length * 0.014,
+            child: const ColoredBox(color: color),
+          );
   }
 }
 

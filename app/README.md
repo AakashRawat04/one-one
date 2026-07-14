@@ -10,6 +10,11 @@ Before running after Phase 3, add:
 android/app/google-services.json
 ```
 
+For Google authentication, enable the Google provider in Firebase Auth, add
+the Android debug/release SHA fingerprints, and re-download
+`google-services.json`. The file must include a web OAuth client
+(`oauth_client` with `client_type: 3`) for the Google Sign-In plugin.
+
 Then run:
 
 ```sh

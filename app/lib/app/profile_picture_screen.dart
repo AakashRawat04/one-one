@@ -4,10 +4,10 @@ import 'dart:typed_data';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
-import 'package:image_picker/image_picker.dart';
 
 import '../features/identity/data/identity_repository.dart';
 import '../features/identity/models/identity_session.dart';
+import '../features/identity/ui/profile_photo_editor.dart';
 
 class ProfilePictureScreen extends StatefulWidget {
   const ProfilePictureScreen({
@@ -28,7 +28,6 @@ class ProfilePictureScreen extends StatefulWidget {
 class _ProfilePictureScreenState extends State<ProfilePictureScreen> {
   static const Duration _transitionDuration = Duration(milliseconds: 260);
 
-  final ImagePicker _picker = ImagePicker();
   Uint8List? _selectedImageBytes;
   String? _existingPhotoUrl;
   bool _saving = false;
@@ -55,21 +54,39 @@ class _ProfilePictureScreenState extends State<ProfilePictureScreen> {
 
   Future<void> _pickImage() async {
     if (_saving) return;
-
-    final pickedFile = await _picker.pickImage(
-      source: ImageSource.gallery,
-      imageQuality: 82,
-      maxWidth: 1600,
-    );
-    if (pickedFile == null) return;
-
-    final bytes = await pickedFile.readAsBytes();
+    final bytes = await ProfilePhotoEditor.pickAndCrop(context);
+    if (bytes == null) return;
     if (!mounted) return;
 
     setState(() {
       _selectedImageBytes = bytes;
       _existingPhotoUrl = null;
     });
+  }
+
+  Future<void> _editExistingPhoto() async {
+    if (_saving) return;
+    final photoUrl = _existingPhotoUrl;
+    if (photoUrl == null || photoUrl.isEmpty) {
+      await _pickImage();
+      return;
+    }
+    try {
+      final bytes = await ProfilePhotoEditor.recropNetworkPhoto(
+        context,
+        photoUrl,
+      );
+      if (bytes == null || !mounted) return;
+      setState(() {
+        _selectedImageBytes = bytes;
+        _existingPhotoUrl = null;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
   }
 
   Future<void> _savePhoto() async {
@@ -386,7 +403,7 @@ class _ProfilePictureScreenState extends State<ProfilePictureScreen> {
                   )
                 else
                   TextButton(
-                    onPressed: _saving ? null : _pickImage,
+                    onPressed: _saving ? null : _editExistingPhoto,
                     child: Text(
                       'change photo',
                       style: TextStyle(

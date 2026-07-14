@@ -68,6 +68,7 @@ class AppUserProfile {
 
   AppUserProfile copyWith({
     String? displayName,
+    String? authProvider,
     int? updatedAt,
     int? lastSeenAt,
     String? profilePhotoUrl,
@@ -78,7 +79,7 @@ class AppUserProfile {
     return AppUserProfile(
       userId: userId,
       displayName: displayName ?? this.displayName,
-      authProvider: authProvider,
+      authProvider: authProvider ?? this.authProvider,
       accountState: accountState,
       createdAt: createdAt,
       updatedAt: updatedAt ?? this.updatedAt,

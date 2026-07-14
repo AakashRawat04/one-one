@@ -40,7 +40,11 @@ dependencies:
   google_fonts: ^6.3.0
   flutter_screenutil: ^5.9.3
   image_picker: ^1.1.2
+  image_cropper: ^11.0.0
+  image: ^4.5.4
   cached_network_image: ^3.4.1
+  connectivity_plus: ^7.2.0
+  google_sign_in: ^7.2.0
   http: ^1.6.0
   livekit_client: ^2.8.1
   flutter_foreground_task: ^9.2.2

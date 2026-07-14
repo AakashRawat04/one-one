@@ -65,7 +65,6 @@ class NoGroupsScreen extends StatelessWidget {
                 context,
                 session: session,
                 identityRepository: identityRepository,
-                onSessionChanged: (_) {},
               ),
             );
           },

@@ -34,6 +34,7 @@ class _StartupGateScreenState extends State<StartupGateScreen> {
   bool _isExistingUser = false;
   Widget? _nextScreen;
   Timer? _introTimer;
+  String? _authError;
 
   @override
   void initState() {
@@ -70,12 +71,16 @@ class _StartupGateScreenState extends State<StartupGateScreen> {
     });
   }
 
-  Future<void> _continueAfterLogin() async {
+  Future<void> _continueAfterLogin({bool useGoogle = false}) async {
     if (_isLoggingIn) return;
 
-    setState(() => _isLoggingIn = true);
+    setState(() {
+      _isLoggingIn = true;
+      _authError = null;
+    });
 
     try {
+      if (useGoogle) await _identityRepository.signInWithGoogle();
       final session = await _identityRepository.ensureIdentity();
       if (!mounted) return;
 
@@ -131,12 +136,15 @@ class _StartupGateScreenState extends State<StartupGateScreen> {
           },
         );
       });
-    } catch (_) {
+    } catch (error) {
       if (!mounted) return;
 
       setState(() {
         _isLoggingIn = false;
         _showLetsGo = true;
+        _authError = useGoogle
+            ? 'Google sign-in couldn\'t be completed. Check the Firebase Google provider setup and try again.'
+            : error.toString();
       });
     }
   }
@@ -201,7 +209,7 @@ class _StartupGateScreenState extends State<StartupGateScreen> {
                           child: ElevatedButton(
                             onPressed: _isLoggingIn
                                 ? null
-                                : _continueAfterLogin,
+                                : () => _continueAfterLogin(),
                             style: ElevatedButton.styleFrom(
                               backgroundColor: Colors.white,
                               foregroundColor: const Color(0xff384047),
@@ -236,6 +244,61 @@ class _StartupGateScreenState extends State<StartupGateScreen> {
                         ),
                       ),
                     ),
+                    SizedBox(height: 12.h),
+                    AnimatedOpacity(
+                      opacity: _showLetsGo ? 1 : 0,
+                      duration: _introAnimationDuration,
+                      child: SizedBox(
+                        width: 260.w,
+                        height: 52.h,
+                        child: OutlinedButton.icon(
+                          onPressed: _isLoggingIn
+                              ? null
+                              : () => _continueAfterLogin(useGoogle: true),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: const Color(0xff384047),
+                            backgroundColor: const Color(0xffF8BE03),
+                            side: const BorderSide(
+                              color: Color.fromRGBO(56, 64, 71, 0.45),
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(26.r),
+                            ),
+                          ),
+                          icon: Text(
+                            'G',
+                            style: TextStyle(
+                              fontSize: 18.sp,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          label: Text(
+                            'Sign in with Google',
+                            style: TextStyle(
+                              fontSize: 15.sp,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    if (_authError != null) ...[
+                      SizedBox(height: 10.h),
+                      Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 28.w),
+                        child: Text(
+                          _authError!,
+                          textAlign: TextAlign.center,
+                          maxLines: 3,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: const Color(0xff7a2f2f),
+                            fontSize: 11.sp,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                    ],
                     SizedBox(height: 30.h),
                     AnimatedOpacity(
                       opacity: _showLetsGo ? 1 : 0,
