@@ -31,6 +31,7 @@ They allow each authenticated anonymous user to read/write:
 - `/userDevices/{ownUserId}`
 - `/userSettings/{ownUserId}`
 - `/memberAvailability/{groupId}/{ownUserId}`
+- `/handRaises/{groupId}/{ownUserId}`
 - own `/appServiceSessions/{sessionId}`
 - own `/livekitSessions/{sessionId}`
 - talk lock/session/status paths for Phase 7 testing

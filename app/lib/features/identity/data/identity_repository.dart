@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -12,6 +11,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../../../app/accent_theme.dart';
 import '../../../core/firebase/app_database.dart';
+import '../../../core/storage/profile_photo_storage.dart';
 import '../models/app_user_profile.dart';
 import '../models/identity_session.dart';
 import '../models/user_device_record.dart';
@@ -23,9 +23,11 @@ class IdentityRepository {
     FirebaseAuth? auth,
     FirebaseDatabase? database,
     DeviceIdentityStore? deviceIdentityStore,
+    ProfilePhotoStorage? profilePhotoStorage,
   }) : _auth = auth ?? FirebaseAuth.instance,
        _database = database ?? AppDatabase.instance(),
-       _deviceIdentityStore = deviceIdentityStore ?? DeviceIdentityStore();
+       _deviceIdentityStore = deviceIdentityStore ?? DeviceIdentityStore(),
+       _profilePhotoStorage = profilePhotoStorage ?? ProfilePhotoStorage();
 
   static const Duration _requiredStartupTimeout = Duration(seconds: 20);
   static const Duration _optionalStartupTimeout = Duration(seconds: 4);
@@ -33,6 +35,7 @@ class IdentityRepository {
   final FirebaseAuth _auth;
   final FirebaseDatabase _database;
   final DeviceIdentityStore _deviceIdentityStore;
+  final ProfilePhotoStorage _profilePhotoStorage;
   IdentitySession? _cachedSession;
 
   Future<IdentitySession> ensureIdentity() async {
@@ -60,6 +63,7 @@ class IdentityRepository {
         createdAt: now,
         updatedAt: now,
         lastSeenAt: now,
+        profilePhotoUrl: _cachedSession?.user.profilePhotoUrl,
         profilePhotoBase64: _cachedSession?.user.profilePhotoBase64,
       ),
       device: UserDeviceRecord(
@@ -191,10 +195,14 @@ class IdentityRepository {
       throw StateError('Cannot update profile photo before sign-in.');
     }
 
-    final encodedPhoto = base64Encode(imageBytes);
+    final photoUrl = await _profilePhotoStorage.uploadProfilePhoto(
+      userId: user.uid,
+      imageBytes: imageBytes,
+    );
     final now = _nowSeconds();
     await _database.ref('users/${user.uid}').update({
-      'profilePhotoBase64': encodedPhoto,
+      'profilePhotoUrl': photoUrl,
+      'profilePhotoBase64': null,
       'updatedAt': now,
       'lastSeenAt': now,
     });
@@ -203,7 +211,8 @@ class IdentityRepository {
     if (session != null) {
       final updatedSession = IdentitySession(
         user: session.user.copyWith(
-          profilePhotoBase64: encodedPhoto,
+          profilePhotoUrl: photoUrl,
+          clearProfilePhotoBase64: true,
           updatedAt: now,
           lastSeenAt: now,
         ),

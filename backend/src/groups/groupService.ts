@@ -2,7 +2,7 @@ import { randomBytes, createHash } from "node:crypto";
 import { getRealtimeDatabase } from "../firebase/database.js";
 import { HttpError } from "../http/httpError.js";
 
-const maxMembers = 4;
+const maxMembers = 100;
 const defaultMaxTalkMs = 60_000;
 
 export type CreateGroupInput = {
@@ -94,7 +94,7 @@ export async function createInvite(input: CreateInviteInput) {
     groupId: input.groupId,
     inviteCodeHash: hashInviteCode(inviteCode),
     createdByUserId: input.userId,
-    maxUses: Math.min(input.maxUses, Math.max(group.maxMembers - 1, 1)),
+    maxUses: Math.min(input.maxUses, Math.max(Math.max(group.maxMembers, maxMembers) - 1, 1)),
     usedCount: 0,
     expiresAt,
     revokedAt: null,
@@ -138,7 +138,10 @@ export async function joinInvite(input: JoinInviteInput) {
     return isRecord(member) && member.memberState === "active";
   }).length;
 
-  if (activeCount >= group.maxMembers) {
+  // Prefer the current product cap so older groups stored with maxMembers=4
+  // can still grow after the limit was raised.
+  const capacity = Math.max(group.maxMembers, maxMembers);
+  if (activeCount >= capacity) {
     throw new HttpError(409, "group_full", "Group already has the maximum number of members.");
   }
 

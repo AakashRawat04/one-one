@@ -134,10 +134,14 @@ class GroupRepository {
       final data = rawMember;
       final userSnapshot = await _database.ref('users/$userId').get();
       String displayName = userId;
+      String? profilePhotoUrl;
+      String? profilePhotoBase64;
 
       if (userSnapshot.value is Map<Object?, Object?>) {
         final userData = userSnapshot.value! as Map<Object?, Object?>;
         displayName = userData['displayName']?.toString() ?? userId;
+        profilePhotoUrl = userData['profilePhotoUrl']?.toString();
+        profilePhotoBase64 = userData['profilePhotoBase64']?.toString();
       }
 
       result.add(
@@ -146,6 +150,8 @@ class GroupRepository {
           displayName: displayName,
           role: data['role']?.toString() ?? 'member',
           memberState: data['memberState']?.toString() ?? 'active',
+          profilePhotoUrl: profilePhotoUrl,
+          profilePhotoBase64: profilePhotoBase64,
         ),
       );
     }

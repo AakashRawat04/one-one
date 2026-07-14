@@ -108,9 +108,9 @@ class _WaitingForGroupMembersScreenState
   Future<void> _copyPin() async {
     await Clipboard.setData(ClipboardData(text: widget.invite.inviteCode));
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('PIN copied')),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('PIN copied')));
   }
 
   Route<void> _slideUpJoinRoute() {
@@ -125,10 +125,10 @@ class _WaitingForGroupMembersScreenState
         );
       },
       transitionsBuilder: (context, animation, secondaryAnimation, child) {
-        final offset = Tween<Offset>(
-          begin: const Offset(0, 1),
-          end: Offset.zero,
-        ).animate(CurvedAnimation(parent: animation, curve: Curves.easeOutCubic));
+        final offset =
+            Tween<Offset>(begin: const Offset(0, 1), end: Offset.zero).animate(
+              CurvedAnimation(parent: animation, curve: Curves.easeOutCubic),
+            );
 
         return SlideTransition(position: offset, child: child);
       },
@@ -140,21 +140,18 @@ class _WaitingForGroupMembersScreenState
   }
 
   void _openSettings() {
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => SettingsScreen(
-          session: widget.session,
-          identityRepository: widget.identityRepository,
-          onSessionChanged: (_) {},
-        ),
+    unawaited(
+      SettingsScreen.open(
+        context,
+        session: widget.session,
+        identityRepository: widget.identityRepository,
+        onSessionChanged: (_) {},
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final accentColor = accentColorForKey(widget.session.settings.accentColorKey);
-
     return Scaffold(
       backgroundColor: const Color(0xff000000),
       body: SafeArea(
@@ -186,8 +183,12 @@ class _WaitingForGroupMembersScreenState
                           fontSize: 15.sp,
                           fontWeight: FontWeight.w600,
                           decoration: TextDecoration.underline,
-                          decorationColor:
-                              const Color.fromRGBO(255, 255, 255, 0.78),
+                          decorationColor: const Color.fromRGBO(
+                            255,
+                            255,
+                            255,
+                            0.78,
+                          ),
                         ),
                       ),
                     ),
@@ -238,10 +239,7 @@ class _WaitingForGroupMembersScreenState
                 child: IconButton(
                   tooltip: 'Settings',
                   onPressed: _openSettings,
-                  icon: Icon(
-                    Icons.settings_outlined,
-                    color: Colors.white,
-                  ),
+                  icon: Icon(Icons.settings_outlined, color: Colors.white),
                 ),
               ),
             ),

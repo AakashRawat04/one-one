@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:image_picker/image_picker.dart';
@@ -18,7 +19,7 @@ class ProfilePictureScreen extends StatefulWidget {
 
   final IdentitySession session;
   final IdentityRepository identityRepository;
-  final Future<void> Function() onComplete;
+  final Future<void> Function(IdentitySession session) onComplete;
 
   @override
   State<ProfilePictureScreen> createState() => _ProfilePictureScreenState();
@@ -29,16 +30,28 @@ class _ProfilePictureScreenState extends State<ProfilePictureScreen> {
 
   final ImagePicker _picker = ImagePicker();
   Uint8List? _selectedImageBytes;
+  String? _existingPhotoUrl;
   bool _saving = false;
 
   @override
   void initState() {
     super.initState();
-    final existing = widget.session.user.profilePhotoBase64;
-    if (existing != null && existing.isNotEmpty) {
-      _selectedImageBytes = base64Decode(existing);
+    final user = widget.session.user;
+    _existingPhotoUrl = user.profilePhotoUrl;
+
+    final existingBase64 = user.profilePhotoBase64;
+    if (existingBase64 != null && existingBase64.isNotEmpty) {
+      try {
+        _selectedImageBytes = base64Decode(existingBase64);
+      } catch (_) {
+        _selectedImageBytes = null;
+      }
     }
   }
+
+  bool get _hasSelectedPhoto =>
+      _selectedImageBytes != null ||
+      (_existingPhotoUrl != null && _existingPhotoUrl!.isNotEmpty);
 
   Future<void> _pickImage() async {
     if (_saving) return;
@@ -53,7 +66,10 @@ class _ProfilePictureScreenState extends State<ProfilePictureScreen> {
     final bytes = await pickedFile.readAsBytes();
     if (!mounted) return;
 
-    setState(() => _selectedImageBytes = bytes);
+    setState(() {
+      _selectedImageBytes = bytes;
+      _existingPhotoUrl = null;
+    });
   }
 
   Future<void> _savePhoto() async {
@@ -63,35 +79,55 @@ class _ProfilePictureScreenState extends State<ProfilePictureScreen> {
     setState(() => _saving = true);
 
     try {
-      await widget.identityRepository.updateProfilePhoto(bytes);
+      final updatedSession = await widget.identityRepository.updateProfilePhoto(
+        bytes,
+      );
       if (!mounted) return;
-      await widget.onComplete();
+      setState(() {
+        _existingPhotoUrl = updatedSession.user.profilePhotoUrl;
+        _selectedImageBytes = null;
+      });
+      await widget.onComplete(updatedSession);
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(error.toString())),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
       setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _skipPhoto() async {
+    if (_saving) return;
+    setState(() => _saving = true);
+
+    try {
+      await widget.onComplete(widget.session);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
     }
   }
 
   void _cancelSelection() {
     if (_saving) return;
-    setState(() => _selectedImageBytes = null);
+    setState(() {
+      _selectedImageBytes = null;
+      _existingPhotoUrl = widget.session.user.profilePhotoUrl;
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    final selectedImageBytes = _selectedImageBytes;
-
     return Scaffold(
-      backgroundColor: selectedImageBytes == null
-          ? const Color(0xff000000)
-          : Colors.black,
+      backgroundColor: _hasSelectedPhoto
+          ? Colors.black
+          : const Color(0xff000000),
       body: SafeArea(
-        child: selectedImageBytes == null
-            ? _buildPickerStage()
-            : _buildPreviewStage(selectedImageBytes),
+        child: _hasSelectedPhoto ? _buildPreviewStage() : _buildPickerStage(),
       ),
     );
   }
@@ -138,10 +174,7 @@ class _ProfilePictureScreenState extends State<ProfilePictureScreen> {
                               shape: BoxShape.circle,
                               color: Color(0xff123a5e),
                             ),
-                            child: const Icon(
-                              Icons.add,
-                              color: Colors.white,
-                            ),
+                            child: const Icon(Icons.add, color: Colors.white),
                           ),
                         ),
                         SizedBox(width: 14.w),
@@ -218,17 +251,35 @@ class _ProfilePictureScreenState extends State<ProfilePictureScreen> {
               ),
             ),
           ),
-          SizedBox(height: 34.h),
+          SizedBox(height: 10.h),
+          TextButton(
+            onPressed: _saving ? null : _skipPhoto,
+            child: Text(
+              'skip for now',
+              style: TextStyle(
+                color: Colors.white70,
+                fontSize: 15.sp,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          SizedBox(height: 18.h),
         ],
       ),
     );
   }
 
-  Widget _buildPreviewStage(Uint8List imageBytes) {
+  Widget _buildPreviewStage() {
+    final imageBytes = _selectedImageBytes;
+    final photoUrl = _existingPhotoUrl;
+
     return Stack(
       fit: StackFit.expand,
       children: [
-        Image.memory(imageBytes, fit: BoxFit.cover),
+        if (imageBytes != null)
+          Image.memory(imageBytes, fit: BoxFit.cover)
+        else if (photoUrl != null && photoUrl.isNotEmpty)
+          CachedNetworkImage(imageUrl: photoUrl, fit: BoxFit.cover),
         Container(color: const Color(0x33000000)),
         Positioned(
           bottom: 24.h,
@@ -239,55 +290,112 @@ class _ProfilePictureScreenState extends State<ProfilePictureScreen> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                SizedBox(
-                  width: 250.w,
-                  height: 52.h,
-                  child: ElevatedButton(
-                    onPressed: _saving ? null : _savePhoto,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.white,
-                      foregroundColor: const Color(0xff384047),
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(26.r),
+                if (imageBytes != null)
+                  SizedBox(
+                    width: 250.w,
+                    height: 52.h,
+                    child: ElevatedButton(
+                      onPressed: _saving ? null : _savePhoto,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.white,
+                        foregroundColor: const Color(0xff384047),
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(26.r),
+                        ),
+                      ),
+                      child: AnimatedSwitcher(
+                        duration: _transitionDuration,
+                        child: _saving
+                            ? SizedBox(
+                                key: const ValueKey('saving'),
+                                width: 20.w,
+                                height: 20.w,
+                                child: const CircularProgressIndicator(
+                                  strokeWidth: 2.4,
+                                  color: Color(0xff384047),
+                                ),
+                              )
+                            : Text(
+                                'add as profile picture',
+                                key: const ValueKey('save-label'),
+                                style: TextStyle(
+                                  fontSize: 15.sp,
+                                  fontWeight: FontWeight.w600,
+                                  color: const Color(0xff384047),
+                                ),
+                              ),
                       ),
                     ),
-                    child: AnimatedSwitcher(
-                      duration: _transitionDuration,
-                      child: _saving
-                          ? SizedBox(
-                              key: const ValueKey('saving'),
-                              width: 20.w,
-                              height: 20.w,
-                              child: const CircularProgressIndicator(
-                                strokeWidth: 2.4,
-                                color: Color(0xff384047),
-                              ),
-                            )
-                          : Text(
-                              'add as profile picture',
-                              key: const ValueKey('save-label'),
-                              style: TextStyle(
-                                fontSize: 15.sp,
-                                fontWeight: FontWeight.w600,
-                                color: const Color(0xff384047),
-                              ),
-                            ),
+                  )
+                else
+                  SizedBox(
+                    width: 250.w,
+                    height: 52.h,
+                    child: ElevatedButton(
+                      onPressed: _saving
+                          ? null
+                          : () => widget.onComplete(widget.session),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.white,
+                        foregroundColor: const Color(0xff384047),
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(26.r),
+                        ),
+                      ),
+                      child: Text(
+                        'continue',
+                        style: TextStyle(
+                          fontSize: 15.sp,
+                          fontWeight: FontWeight.w600,
+                          color: const Color(0xff384047),
+                        ),
+                      ),
                     ),
                   ),
-                ),
                 SizedBox(height: 18.h),
-                TextButton(
-                  onPressed: _saving ? null : _cancelSelection,
-                  child: Text(
-                    'cancel',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 16.sp,
-                      fontWeight: FontWeight.w600,
+                if (imageBytes != null)
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      TextButton(
+                        onPressed: _saving ? null : _cancelSelection,
+                        child: Text(
+                          'cancel',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 16.sp,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      SizedBox(width: 12.w),
+                      TextButton(
+                        onPressed: _saving ? null : _skipPhoto,
+                        child: Text(
+                          'skip for now',
+                          style: TextStyle(
+                            color: Colors.white70,
+                            fontSize: 16.sp,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ],
+                  )
+                else
+                  TextButton(
+                    onPressed: _saving ? null : _pickImage,
+                    child: Text(
+                      'change photo',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 16.sp,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
-                ),
               ],
             ),
           ),

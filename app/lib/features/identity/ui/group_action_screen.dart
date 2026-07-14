@@ -3,7 +3,6 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 
 import '../../../app/accent_theme.dart';
 import '../../groups/data/group_repository.dart';
-import '../../groups/ui/waiting_for_group_members_screen.dart';
 import '../data/identity_repository.dart';
 import '../models/identity_session.dart';
 import 'identity_home_screen.dart';
@@ -80,16 +79,13 @@ class _GroupActionScreenState extends State<GroupActionScreen>
 
     try {
       if (_isCreateMode) {
-        final group = await _groupRepository.createGroup(value);
-        final invite = await _groupRepository.createInvite(group.groupId);
+        await _groupRepository.createGroup(value);
 
         if (!mounted) return;
         Navigator.of(context).pushAndRemoveUntil(
           MaterialPageRoute<void>(
-            builder: (_) => WaitingForGroupMembersScreen(
-              group: group,
-              invite: invite,
-              session: widget.session,
+            builder: (_) => IdentityHomeScreen(
+              initialSession: widget.session,
               identityRepository: widget.identityRepository,
             ),
           ),
@@ -126,7 +122,9 @@ class _GroupActionScreenState extends State<GroupActionScreen>
         ? 'name the group you want to start'
         : 'ask your friend for their pin';
     final hintText = _isCreateMode ? 'Group name' : 'Invite PIN';
-    final accentColor = accentColorForKey(widget.session.settings.accentColorKey);
+    final accentColor = accentColorForKey(
+      widget.session.settings.accentColorKey,
+    );
 
     return Scaffold(
       backgroundColor: const Color(0xff000000),
@@ -141,8 +139,13 @@ class _GroupActionScreenState extends State<GroupActionScreen>
                 alignment: Alignment.centerLeft,
                 child: IconButton(
                   tooltip: 'Back',
-                  onPressed: _busy ? null : () => Navigator.of(context).maybePop(),
-                  icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
+                  onPressed: _busy
+                      ? null
+                      : () => Navigator.of(context).maybePop(),
+                  icon: const Icon(
+                    Icons.arrow_back_rounded,
+                    color: Colors.white,
+                  ),
                 ),
               ),
               SizedBox(height: 4.h),
@@ -150,17 +153,17 @@ class _GroupActionScreenState extends State<GroupActionScreen>
                 title,
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w700,
-                    ),
+                  color: Colors.white,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
               SizedBox(height: 8.h),
               Text(
                 subtitle,
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: const Color.fromRGBO(255, 255, 255, 0.7),
-                    ),
+                  color: const Color.fromRGBO(255, 255, 255, 0.7),
+                ),
               ),
               SizedBox(height: 24.h),
               Container(
@@ -180,8 +183,9 @@ class _GroupActionScreenState extends State<GroupActionScreen>
                     fontSize: 18.sp,
                     fontWeight: FontWeight.w600,
                   ),
-                  textCapitalization:
-                      _isCreateMode ? TextCapitalization.words : TextCapitalization.characters,
+                  textCapitalization: _isCreateMode
+                      ? TextCapitalization.words
+                      : TextCapitalization.characters,
                   decoration: InputDecoration(
                     border: InputBorder.none,
                     isDense: true,
@@ -270,12 +274,7 @@ class _AnimatedGradientSubmitButton extends StatelessWidget {
                       ? LinearGradient(
                           begin: Alignment.centerLeft,
                           end: Alignment.centerRight,
-                          colors: [
-                            accentColor,
-                            glow,
-                            blend,
-                            accentColor,
-                          ],
+                          colors: [accentColor, glow, blend, accentColor],
                           stops: const [0.0, 0.34, 0.66, 1.0],
                           tileMode: TileMode.repeated,
                           transform: _LiquidGradientTransform(animation.value),
@@ -311,14 +310,13 @@ class _AnimatedGradientSubmitButton extends StatelessWidget {
 }
 
 class _LiquidGradientTransform extends GradientTransform {
-  const _LiquidGradientTransform(this.slide, {this.periodFactor = 3.0});
+  const _LiquidGradientTransform(this.slide);
 
   final double slide;
-  final double periodFactor;
 
   @override
   Matrix4? transform(Rect bounds, {TextDirection? textDirection}) {
-    final period = bounds.width * periodFactor;
+    final period = bounds.width * 3;
     final scale = period / bounds.width;
 
     return Matrix4.identity()

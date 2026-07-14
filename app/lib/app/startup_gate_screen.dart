@@ -14,6 +14,7 @@ import 'battery_optimization_screen.dart';
 import 'display_name_screen.dart';
 import 'profile_picture_screen.dart';
 import 'setup_permission_screen.dart';
+import 'startup_session_policy.dart';
 
 class StartupGateScreen extends StatefulWidget {
   const StartupGateScreen({super.key});
@@ -53,10 +54,15 @@ class _StartupGateScreenState extends State<StartupGateScreen> {
 
     _isExistingUser = authUser != null;
 
-    _introTimer = Timer(_introDelay, () {
+    _introTimer = Timer(_introDelay, () async {
       if (!mounted) return;
 
-      if (_isExistingUser) {
+      final shouldResume = StartupSessionPolicy.shouldResume(
+        hadInitialFirebaseUser: _isExistingUser,
+        hasCurrentFirebaseUser: FirebaseAuth.instance.currentUser != null,
+      );
+
+      if (shouldResume) {
         unawaited(_continueAfterLogin());
       } else {
         setState(() => _showLetsGo = true);
@@ -90,11 +96,11 @@ class _StartupGateScreenState extends State<StartupGateScreen> {
         _nextScreen = ProfilePictureScreen(
           session: session,
           identityRepository: _identityRepository,
-          onComplete: () async {
+          onComplete: (updatedSession) async {
             if (!mounted) return;
             setState(() {
               _nextScreen = DisplayNameScreen(
-                session: session,
+                session: updatedSession,
                 identityRepository: _identityRepository,
                 onComplete: () async {
                   if (!mounted) return;
@@ -105,11 +111,11 @@ class _StartupGateScreenState extends State<StartupGateScreen> {
                         setState(() {
                           _nextScreen = BatteryOptimizationScreen(
                             onComplete: () async {
-                              await _markSetupComplete(session.userId);
+                              await _markSetupComplete(updatedSession.userId);
                               if (!mounted) return;
                               setState(() {
                                 _nextScreen = _GroupEntryBootstrap(
-                                  session: session,
+                                  session: updatedSession,
                                   identityRepository: _identityRepository,
                                 );
                               });
@@ -155,7 +161,7 @@ class _StartupGateScreenState extends State<StartupGateScreen> {
     }
 
     return Scaffold(
-      backgroundColor: const Color(0xfffe0000),
+      backgroundColor: const Color(0xffF8BE03),
       body: SafeArea(
         child: Stack(
           children: [
@@ -193,7 +199,9 @@ class _StartupGateScreenState extends State<StartupGateScreen> {
                           width: 260.w,
                           height: 52.h,
                           child: ElevatedButton(
-                            onPressed: _isLoggingIn ? null : _continueAfterLogin,
+                            onPressed: _isLoggingIn
+                                ? null
+                                : _continueAfterLogin,
                             style: ElevatedButton.styleFrom(
                               backgroundColor: Colors.white,
                               foregroundColor: const Color(0xff384047),
@@ -238,7 +246,7 @@ class _StartupGateScreenState extends State<StartupGateScreen> {
                             'by continuing you agree to our',
                             textAlign: TextAlign.center,
                             style: TextStyle(
-                              color: const Color.fromRGBO(255, 255, 255, 0.78),
+                              color: const Color.fromRGBO(56, 64, 71, 0.78),
                               fontSize: 11.sp,
                               height: 1.25,
                             ),
@@ -247,12 +255,16 @@ class _StartupGateScreenState extends State<StartupGateScreen> {
                             'terms & policies',
                             textAlign: TextAlign.center,
                             style: TextStyle(
-                              color: const Color.fromRGBO(255, 255, 255, 0.78),
+                              color: const Color.fromRGBO(56, 64, 71, 0.78),
                               fontSize: 11.sp,
                               height: 1.25,
                               decoration: TextDecoration.underline,
-                              decorationColor:
-                                  const Color.fromRGBO(255, 255, 255, 0.78),
+                              decorationColor: const Color.fromRGBO(
+                                56,
+                                64,
+                                71,
+                                0.78,
+                              ),
                             ),
                           ),
                         ],
@@ -317,9 +329,7 @@ class _GroupEntryBootstrapState extends State<_GroupEntryBootstrap> {
     if (screen == null) {
       return const Scaffold(
         backgroundColor: Color(0xff000000),
-        body: Center(
-          child: CircularProgressIndicator(color: Colors.white),
-        ),
+        body: Center(child: CircularProgressIndicator(color: Colors.white)),
       );
     }
 

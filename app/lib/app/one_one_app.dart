@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
@@ -32,18 +35,69 @@ class OneOneApp extends StatelessWidget {
           theme: ThemeData(
             colorScheme: ColorScheme.fromSeed(
               seedColor: seedColor,
-              brightness: Brightness.light,
+              brightness: Brightness.dark,
             ),
+            brightness: Brightness.dark,
+            scaffoldBackgroundColor: const Color(0xff101010),
+            canvasColor: const Color(0xff101010),
             fontFamily: GoogleFonts.poppins().fontFamily,
-            textTheme: GoogleFonts.poppinsTextTheme(),
-            primaryTextTheme: GoogleFonts.poppinsTextTheme(),
+            textTheme: GoogleFonts.poppinsTextTheme(
+              ThemeData(brightness: Brightness.dark).textTheme,
+            ),
+            primaryTextTheme: GoogleFonts.poppinsTextTheme(
+              ThemeData(brightness: Brightness.dark).textTheme,
+            ),
             useMaterial3: true,
           ),
-          home: const WithForegroundTask(child: _FirebaseGate()),
+          home: const WithForegroundTask(
+            child: _AuthSessionLifecycle(child: _FirebaseGate()),
+          ),
         );
       },
     );
   }
+}
+
+class _AuthSessionLifecycle extends StatefulWidget {
+  const _AuthSessionLifecycle({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_AuthSessionLifecycle> createState() => _AuthSessionLifecycleState();
+}
+
+class _AuthSessionLifecycleState extends State<_AuthSessionLifecycle>
+    with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_refreshFirebaseToken());
+    }
+  }
+
+  Future<void> _refreshFirebaseToken() async {
+    try {
+      await FirebaseAuth.instance.currentUser?.getIdToken();
+    } catch (_) {
+      // Keep the mounted session intact; Firebase retries token refresh on use.
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }
 
 class _FirebaseGate extends StatefulWidget {
@@ -63,7 +117,7 @@ class _FirebaseGateState extends State<_FirebaseGate> {
       builder: (context, snapshot) {
         if (snapshot.connectionState != ConnectionState.done) {
           return Scaffold(
-            backgroundColor: const Color(0xfffe0000),
+            backgroundColor: const Color(0xffF8BE03),
             body: SafeArea(
               child: Center(
                 child: Image.asset(

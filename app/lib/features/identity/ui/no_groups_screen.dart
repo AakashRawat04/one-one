@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 
@@ -58,13 +60,12 @@ class NoGroupsScreen extends StatelessWidget {
         leading: IconButton(
           tooltip: 'Settings',
           onPressed: () {
-            Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (_) => SettingsScreen(
-                  session: session,
-                  identityRepository: identityRepository,
-                  onSessionChanged: (_) {},
-                ),
+            unawaited(
+              SettingsScreen.open(
+                context,
+                session: session,
+                identityRepository: identityRepository,
+                onSessionChanged: (_) {},
               ),
             );
           },
