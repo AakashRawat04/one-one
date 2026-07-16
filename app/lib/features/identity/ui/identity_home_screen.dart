@@ -73,7 +73,9 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
   EventsListener<RoomEvent>? _roomListener;
   Timer? _heartbeatTimer;
 
-  late final ScrollController _carouselController = ScrollController();
+  late final PageController _carouselController = PageController(
+    viewportFraction: 0.78,
+  );
   int _carouselIndex = 0;
 
   bool _loadingGroups = true;
@@ -371,7 +373,6 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
     }
 
     await _selectGroup(group.groupId);
-    _scrollToGroupIndex(index);
   }
 
   void _syncCarouselToSelectedGroup() {
@@ -385,26 +386,10 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
     _carouselIndex = index;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_carouselController.hasClients) return;
-      _scrollToGroupIndex(index);
+      if (_carouselController.page?.round() != index) {
+        _carouselController.jumpToPage(index);
+      }
     });
-  }
-
-  void _scrollToGroupIndex(int index) {
-    if (!_carouselController.hasClients) return;
-    // carousel item layout: [Join, Group0, Group1, ..., GroupN, Create]
-    // Each item is roughly 110.w wide, so we scroll to center the selected one.
-    final itemWidth = 110.w;
-    final padding = 16.w;
-    final carouselIndex = index + 1; // +1 for the Join item at position 0
-    final targetOffset = (carouselIndex * (itemWidth + padding)) -
-        (MediaQuery.of(context).size.width / 2) +
-        (itemWidth / 2);
-    final maxScroll = _carouselController.position.maxScrollExtent;
-    _carouselController.animateTo(
-      targetOffset.clamp(0.0, maxScroll),
-      duration: const Duration(milliseconds: 280),
-      curve: Curves.easeOutCubic,
-    );
   }
 
   void _openCreateGroup() {
@@ -575,6 +560,13 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
                     );
                     if (index >= 0) {
                       unawaited(_onGroupCarouselChanged(index));
+                      if (_carouselController.hasClients) {
+                        _carouselController.animateToPage(
+                          index,
+                          duration: const Duration(milliseconds: 280),
+                          curve: Curves.easeOutCubic,
+                        );
+                      }
                     }
                   },
                   title: Text(
@@ -1478,15 +1470,15 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
                 SizedBox(height: 10.h),
                 SizedBox(
                   height: 200.h,
-                  child: _GroupCarousel(
-                    scrollController: _carouselController,
+                  child: _ExperienceCarousel(
+                    controller: _carouselController,
                     items: items,
-                    selectedIndex: _carouselIndex,
+                    index: _carouselIndex,
                     talkEnabled: _isOnline && !_busy,
                     talkActive: _talkSession != null,
                     talkBusy: _talkBusy,
                     accent: accent,
-                    onGroupSelected: (index) {
+                    onPageChanged: (index) {
                       unawaited(_onGroupCarouselChanged(index));
                     },
                     onTalkStart: _startTalking,
@@ -1495,6 +1487,13 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
                     onJoinGroup: _openJoinGroup,
                   ),
                 ),
+                if (items.length > 1) ...[
+                  SizedBox(height: 8.h),
+                  _CarouselDotIndicator(
+                    count: items.length,
+                    index: _carouselIndex.clamp(0, items.length - 1),
+                  ),
+                ],
                 SizedBox(height: 18.h),
                 Text(
                   _isOnline
@@ -2424,34 +2423,62 @@ class _CarouselCaption extends StatelessWidget {
   }
 }
 
-/// Group carousel — horizontal scrollable row showing Join (+), all groups,
-/// and Create (+) in a single strip, like Snapchat filters or Instagram
-/// story bubbles. The selected group is visually highlighted without
-/// forcing it to the center of the screen.
-class _GroupCarousel extends StatelessWidget {
-  const _GroupCarousel({
-    required this.scrollController,
+/// Page-indicator dots shown below the group carousel when the user has
+/// more than one group, so position/count is obvious at a glance.
+class _CarouselDotIndicator extends StatelessWidget {
+  const _CarouselDotIndicator({required this.count, required this.index});
+
+  final int count;
+  final int index;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        for (var i = 0; i < count; i++)
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+            margin: EdgeInsets.symmetric(horizontal: 3.w),
+            width: i == index ? 16.w : 6.w,
+            height: 6.w,
+            decoration: BoxDecoration(
+              color: i == index
+                  ? Colors.white
+                  : const Color.fromRGBO(255, 255, 255, 0.35),
+              borderRadius: BorderRadius.circular(3.r),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _ExperienceCarousel extends StatelessWidget {
+  const _ExperienceCarousel({
+    required this.controller,
     required this.items,
-    required this.selectedIndex,
+    required this.index,
     required this.talkEnabled,
     required this.talkActive,
     required this.talkBusy,
     required this.accent,
-    required this.onGroupSelected,
+    required this.onPageChanged,
     required this.onTalkStart,
     required this.onTalkStop,
     required this.onCreateGroup,
     required this.onJoinGroup,
   });
 
-  final ScrollController scrollController;
+  final PageController controller;
   final List<_CarouselItem> items;
-  final int selectedIndex;
+  final int index;
   final bool talkEnabled;
   final bool talkActive;
   final bool talkBusy;
   final Color accent;
-  final ValueChanged<int> onGroupSelected;
+  final ValueChanged<int> onPageChanged;
   final Future<void> Function() onTalkStart;
   final Future<void> Function() onTalkStop;
   final VoidCallback onCreateGroup;
@@ -2459,83 +2486,121 @@ class _GroupCarousel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListView.builder(
-      controller: scrollController,
-      scrollDirection: Axis.horizontal,
-      padding: EdgeInsets.symmetric(horizontal: 16.w),
-      itemCount: items.length + 2, // Join at start, Create at end
-      itemBuilder: (context, index) {
-        // First item: Join Group
-        if (index == 0) {
-          return Padding(
-            padding: EdgeInsets.only(right: 10.w),
-            child: _ActionItem(
-              icon: Icons.group_add_outlined,
-              label: 'join',
-              highlighted: false,
-              accent: accent,
-              onTap: onJoinGroup,
-            ),
-          );
-        }
+    if (items.isEmpty) {
+      return Row(
+        children: [
+          SizedBox(width: 16.w),
+          _DashedAddCircle(
+            onTap: onJoinGroup,
+            compact: true,
+            label: '+ join\ngroup',
+          ),
+          const Spacer(),
+          _DashedAddCircle(
+            onTap: onCreateGroup,
+            compact: true,
+            label: '+ create\nnew group',
+          ),
+          SizedBox(width: 16.w),
+        ],
+      );
+    }
 
-        // Last item: Create Group
-        if (index == items.length + 1) {
-          return Padding(
-            padding: EdgeInsets.only(left: 10.w),
-            child: _ActionItem(
-              icon: Icons.add_circle_outline,
-              label: 'create',
-              highlighted: false,
-              accent: accent,
-              onTap: onCreateGroup,
-            ),
-          );
-        }
+    final has3d = items.length > 1;
 
-        // Group card
-        final itemIndex = index - 1;
-        final item = items[itemIndex];
-        final selected = itemIndex == selectedIndex;
+    return Row(
+      children: [
+        SizedBox(width: 16.w),
+        _DashedAddCircle(
+          onTap: onJoinGroup,
+          compact: true,
+          label: '+ join\ngroup',
+        ),
+        SizedBox(width: 12.w),
+        Expanded(
+          child: PageView.builder(
+            controller: controller,
+            itemCount: items.length,
+            onPageChanged: onPageChanged,
+            itemBuilder: (context, itemIndex) {
+              final item = items[itemIndex];
+              final selected = itemIndex == index;
 
-        return Padding(
-          padding: EdgeInsets.symmetric(horizontal: 10.w),
-          child: _GroupCarouselCard(
-            item: item,
-            selected: selected,
-            talkEnabled: talkEnabled && selected,
-            talkActive: talkActive && selected,
-            talkBusy: talkBusy,
-            accent: accent,
-            onTap: () {
-              if (selected && talkEnabled) {
-                if (talkActive) {
-                  unawaited(onTalkStop());
-                } else {
-                  unawaited(onTalkStart());
-                }
-              } else {
-                onGroupSelected(itemIndex);
+              final avatar = Center(
+                child: _MainAvatarCircle(
+                  item: item,
+                  selected: selected,
+                  talkEnabled: talkEnabled && selected,
+                  talkActive: talkActive && selected,
+                  talkBusy: talkBusy,
+                  accent: accent,
+                  onTalkStart: onTalkStart,
+                  onTalkStop: onTalkStop,
+                ),
+              );
+
+              if (!has3d) {
+                return AnimatedScale(
+                  scale: selected ? 1.0 : 0.78,
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeOutCubic,
+                  child: avatar,
+                );
               }
+
+              // Light 3D card-stack feel: continuously tilt/scale/fade each
+              // card based on its live distance from the current page, so
+              // it reads as a swipeable stack rather than a flat list.
+              return AnimatedBuilder(
+                animation: controller,
+                builder: (context, child) {
+                  var page = index.toDouble();
+                  if (controller.hasClients) {
+                    page = controller.page ?? index.toDouble();
+                  }
+                  final delta = (itemIndex - page).clamp(-1.4, 1.4);
+                  final scale = (1 - delta.abs() * 0.24).clamp(0.7, 1.0);
+                  final opacity = (1 - delta.abs() * 0.35).clamp(0.45, 1.0);
+                  final rotationY = delta * 0.55;
+
+                  return Opacity(
+                    opacity: opacity,
+                    child: Transform(
+                      alignment: Alignment.center,
+                      transform: Matrix4.identity()
+                        ..setEntry(3, 2, 0.0012)
+                        ..rotateY(rotationY),
+                      child: Transform.scale(scale: scale, child: child),
+                    ),
+                  );
+                },
+                child: avatar,
+              );
             },
           ),
-        );
-      },
+        ),
+        SizedBox(width: 12.w),
+        _DashedAddCircle(
+          onTap: onCreateGroup,
+          compact: true,
+          label: '+ create\nnew group',
+        ),
+        SizedBox(width: 16.w),
+      ],
     );
   }
 }
 
-/// A single group card in the horizontal carousel — circular member collage
-/// with the group name below, highlighted when selected.
-class _GroupCarouselCard extends StatelessWidget {
-  const _GroupCarouselCard({
+class _MainAvatarCircle extends StatelessWidget {
+  const _MainAvatarCircle({
     required this.item,
     required this.selected,
     required this.talkEnabled,
     required this.talkActive,
     required this.talkBusy,
     required this.accent,
-    required this.onTap,
+    required this.onTalkStart,
+    required this.onTalkStop,
   });
 
   final _CarouselItem item;
@@ -2544,160 +2609,72 @@ class _GroupCarouselCard extends StatelessWidget {
   final bool talkActive;
   final bool talkBusy;
   final Color accent;
-  final VoidCallback onTap;
+  final Future<void> Function() onTalkStart;
+  final Future<void> Function() onTalkStop;
 
   @override
   Widget build(BuildContext context) {
-    final circleSize = selected ? 100.w : 86.w;
+    final size = selected ? 124.w : 104.w;
 
-    return Semantics(
-      button: true,
-      label: selected
-          ? (talkActive ? 'Stop talking in ${item.group.name}' : 'Talk in ${item.group.name}')
-          : 'Switch to ${item.group.name}',
-      child: GestureDetector(
-        onTap: talkBusy ? null : onTap,
-        child: AnimatedOpacity(
-          duration: const Duration(milliseconds: 180),
-          opacity: talkBusy && selected ? 0.65 : 1,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 220),
-                curve: Curves.easeOutCubic,
-                width: circleSize,
-                height: circleSize,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: selected
-                        ? (talkActive ? accent : Colors.white)
-                        : const Color.fromRGBO(255, 255, 255, 0.35),
-                    width: selected ? 2.8 : 1.8,
-                  ),
-                  boxShadow: selected
-                      ? [
-                          BoxShadow(
-                            color: accent.withValues(alpha: 0.18),
-                            blurRadius: 14.r,
-                            spreadRadius: -2.r,
-                          ),
-                        ]
-                      : null,
-                ),
-                child: ClipOval(
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      _MemberPhotoCollage(
-                        members: item.members,
-                        fallbackPhotoUrl: item.profilePhotoUrl,
-                        fallbackPhotoBase64: item.profilePhotoBase64,
-                        tileSize: circleSize,
-                      ),
-                      Align(
-                        alignment: Alignment.bottomCenter,
-                        child: Padding(
-                          padding: EdgeInsets.only(bottom: circleSize * 0.06),
-                          child: Icon(
-                            Icons.mic,
-                            color: selected ? Colors.white : Colors.white54,
-                            size: circleSize * 0.16,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              SizedBox(height: 6.h),
-              SizedBox(
-                width: circleSize + 16.w,
-                child: Text(
-                  item.group.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: selected ? Colors.white : Colors.white60,
-                    fontSize: 11.sp,
-                    fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                  ),
-                ),
-              ),
-              // Member count badge for the selected group
-              if (selected && item.members.isNotEmpty)
-                Text(
-                  '${item.members.length} ${item.members.length == 1 ? 'member' : 'members'}',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Colors.white38,
-                    fontSize: 9.sp,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-            ],
-          ),
+    Widget circle = Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border: Border.all(
+          color: talkActive ? accent : Colors.white,
+          width: selected ? 2.5 : 2,
         ),
       ),
-    );
-  }
-}
-
-/// Join / Create action item shown at the ends of the carousel.
-class _ActionItem extends StatelessWidget {
-  const _ActionItem({
-    required this.icon,
-    required this.label,
-    required this.highlighted,
-    required this.accent,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final String label;
-  final bool highlighted;
-  final Color accent;
-  final VoidCallback? onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Opacity(
-        opacity: onTap == null ? 0.45 : 1,
-        child: CustomPaint(
-          painter: _DashedCirclePainter(
-            color: const Color.fromRGBO(255, 255, 255, 0.65),
-          ),
-          child: SizedBox(
-            width: 76.w,
-            height: 76.w,
-            child: Center(
+      child: ClipOval(
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            _MemberPhotoCollage(
+              members: item.members,
+              fallbackPhotoUrl: item.profilePhotoUrl,
+              fallbackPhotoBase64: item.profilePhotoBase64,
+              tileSize: size,
+            ),
+            Align(
+              alignment: Alignment.bottomCenter,
               child: Padding(
-                padding: EdgeInsets.all(16.w),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(icon, color: Colors.white, size: 20.sp),
-                    SizedBox(height: 2.h),
-                    Text(
-                      label,
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 9.sp,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
+                padding: EdgeInsets.only(bottom: size * 0.08),
+                child: Icon(
+                  Icons.mic,
+                  color: Colors.white,
+                  size: talkActive ? size * 0.22 : size * 0.18,
                 ),
               ),
             ),
-          ),
+          ],
         ),
       ),
+    );
+
+    if (talkEnabled) {
+      circle = Semantics(
+        button: true,
+        label: talkActive ? 'Stop talking' : 'Tap to Talk',
+        child: GestureDetector(
+          onTap: talkBusy
+              ? null
+              : () {
+                  if (talkActive) {
+                    unawaited(onTalkStop());
+                  } else {
+                    unawaited(onTalkStart());
+                  }
+                },
+          child: circle,
+        ),
+      );
+    }
+
+    return AnimatedOpacity(
+      duration: const Duration(milliseconds: 180),
+      opacity: talkBusy ? 0.65 : 1,
+      child: circle,
     );
   }
 }
@@ -2864,6 +2841,53 @@ class _CollageDivider extends StatelessWidget {
             height: length * 0.014,
             child: const ColoredBox(color: color),
           );
+  }
+}
+
+class _DashedAddCircle extends StatelessWidget {
+  const _DashedAddCircle({
+    required this.onTap,
+    required this.compact,
+    required this.label,
+  });
+
+  final VoidCallback? onTap;
+  final bool compact;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final size = compact ? 84.w : 110.w;
+    return GestureDetector(
+      onTap: onTap,
+      child: Opacity(
+        opacity: onTap == null ? 0.45 : 1,
+        child: CustomPaint(
+          painter: _DashedCirclePainter(
+            color: const Color.fromRGBO(255, 255, 255, 0.7),
+          ),
+          child: SizedBox(
+            width: size,
+            height: size,
+            child: Center(
+              child: Padding(
+                padding: EdgeInsets.all(10.w),
+                child: Text(
+                  label,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: compact ? 10.sp : 12.sp,
+                    fontWeight: FontWeight.w600,
+                    height: 1.15,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 
