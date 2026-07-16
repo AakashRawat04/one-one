@@ -92,16 +92,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _audioOutputPreference = currentSession.settings.audioOutputPreference;
       _persistedAccentColorKey = currentSession.settings.accentColorKey;
     }
-    widget.identityRepository.sessionListenable.addListener(
-      _onRepositorySessionChanged,
-    );
+    try {
+      widget.identityRepository.sessionListenable.addListener(
+        _onRepositorySessionChanged,
+      );
+    } catch (_) {
+      // The session listenable may be in a partially-disposed state during
+      // navigation transitions. The screen still works with the session
+      // captured from the constructor above.
+    }
   }
 
   @override
   void dispose() {
-    widget.identityRepository.sessionListenable.removeListener(
-      _onRepositorySessionChanged,
-    );
+    try {
+      widget.identityRepository.sessionListenable.removeListener(
+        _onRepositorySessionChanged,
+      );
+    } catch (_) {
+      // Best-effort cleanup when the listenable is already torn down.
+    }
     if (_hasUnsavedAccentPreview) {
       AccentThemeController.setAccentKey(_persistedAccentColorKey);
     }

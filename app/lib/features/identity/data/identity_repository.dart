@@ -40,9 +40,13 @@ class IdentityRepository {
   final ProfilePhotoStorage _profilePhotoStorage;
   IdentitySession? _cachedSession;
   final ValueNotifier<IdentitySession?> _sessionNotifier = ValueNotifier(null);
+  bool _disposed = false;
 
   ValueListenable<IdentitySession?> get sessionListenable => _sessionNotifier;
-  IdentitySession? get currentSession => _sessionNotifier.value;
+  IdentitySession? get currentSession {
+    if (_disposed) return _cachedSession;
+    return _sessionNotifier.value;
+  }
 
   static Future<void>? _googleSignInInitialization;
 
@@ -278,7 +282,17 @@ class IdentityRepository {
     return user;
   }
 
-  void dispose() => _sessionNotifier.dispose();
+  void dispose() {
+    _disposed = true;
+    _cachedSession = null;
+    // Do not call _sessionNotifier.dispose() here — this repository is
+    // referenced by screens that may outlive the StartupGateScreen that owns
+    // it (e.g. SettingsScreen opened via push uses the same listenable).
+    // The notifier will be garbage-collected when the app is torn down.
+    _sessionNotifier.value = null;
+  }
+
+  bool get isDisposed => _disposed;
 
   Future<User> _ensureAnonymousUser() async {
     final currentUser = _auth.currentUser;
@@ -482,7 +496,9 @@ class IdentityRepository {
 
   void _publishSession(IdentitySession session) {
     _cachedSession = session;
-    _sessionNotifier.value = session;
+    if (!_disposed) {
+      _sessionNotifier.value = session;
+    }
   }
 
   Future<void> _evictProfilePhoto(String? url) async {
