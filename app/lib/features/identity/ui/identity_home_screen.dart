@@ -1495,7 +1495,6 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
                 if (focusedGroup != null)
                   _CarouselCaption(
                     displayName: _session.user.displayName,
-                    isTalking: _state == 'talking',
                     handRaised: _handRaises[_session.userId] == true,
                     handRaiseBusy: _handRaiseBusy,
                     handRaiseEnabled: _isOnline,
@@ -2296,7 +2295,6 @@ class _AddFriendChip extends StatelessWidget {
 class _CarouselCaption extends StatelessWidget {
   const _CarouselCaption({
     required this.displayName,
-    required this.isTalking,
     required this.handRaised,
     required this.handRaiseBusy,
     required this.handRaiseEnabled,
@@ -2309,7 +2307,6 @@ class _CarouselCaption extends StatelessWidget {
   });
 
   final String displayName;
-  final bool isTalking;
   final bool handRaised;
   final bool handRaiseBusy;
   final bool handRaiseEnabled;
@@ -2366,28 +2363,6 @@ class _CarouselCaption extends StatelessWidget {
           child: Stack(
             alignment: Alignment.center,
             children: [
-              if (isTalking)
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: Container(
-                    padding: EdgeInsets.symmetric(
-                      horizontal: 14.w,
-                      vertical: 7.h,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(18.r),
-                    ),
-                    child: Text(
-                      '🎙️ talking!',
-                      style: TextStyle(
-                        color: Colors.black,
-                        fontSize: 13.sp,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                ),
               Center(
                 child: Opacity(
                   opacity: handRaiseBusy || !handRaiseEnabled ? 0.45 : 1,
@@ -2736,11 +2711,13 @@ class _ExperienceCarouselState extends State<_ExperienceCarousel>
                         shaderCallback: (bounds) => const LinearGradient(
                           colors: [
                             Colors.transparent,
+                            Color(0x40FFFFFF),
                             Colors.white,
                             Colors.white,
+                            Color(0x40FFFFFF),
                             Colors.transparent,
                           ],
-                          stops: [0, 0.14, 0.86, 1],
+                          stops: [0, 0.08, 0.22, 0.78, 0.92, 1],
                         ).createShader(bounds),
                         child: GestureDetector(
                           behavior: HitTestBehavior.opaque,
@@ -2758,19 +2735,19 @@ class _ExperienceCarouselState extends State<_ExperienceCarousel>
                         ),
                       ),
                     ),
-                    const Positioned(
+                    Positioned(
                       left: 0,
                       top: 0,
                       bottom: 0,
-                      width: 24,
-                      child: _CarouselEdgeVeil(leftEdge: true),
+                      width: 52.w,
+                      child: const _CarouselEdgeVeil(leftEdge: true),
                     ),
-                    const Positioned(
+                    Positioned(
                       right: 0,
                       top: 0,
                       bottom: 0,
-                      width: 24,
-                      child: _CarouselEdgeVeil(leftEdge: false),
+                      width: 52.w,
+                      child: const _CarouselEdgeVeil(leftEdge: false),
                     ),
                   ],
                 ),
@@ -2798,17 +2775,18 @@ class _CarouselEdgeVeil extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return IgnorePointer(
-      child: ClipRect(
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: leftEdge ? Alignment.centerLeft : Alignment.centerRight,
-                end: leftEdge ? Alignment.centerRight : Alignment.centerLeft,
-                colors: const [Color(0x26000000), Colors.transparent],
-              ),
-            ),
+      child: ShaderMask(
+        blendMode: BlendMode.dstIn,
+        shaderCallback: (bounds) => LinearGradient(
+          begin: leftEdge ? Alignment.centerLeft : Alignment.centerRight,
+          end: leftEdge ? Alignment.centerRight : Alignment.centerLeft,
+          colors: const [Colors.white, Color(0x99FFFFFF), Colors.transparent],
+          stops: const [0, 0.35, 1],
+        ).createShader(bounds),
+        child: ClipRect(
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+            child: const ColoredBox(color: Colors.transparent),
           ),
         ),
       ),
@@ -2867,7 +2845,7 @@ class _MainAvatarCircle extends StatelessWidget {
                 padding: EdgeInsets.only(bottom: size * 0.08),
                 child: Icon(
                   Icons.mic,
-                  color: Colors.white,
+                  color: talkActive ? const Color(0xffffd54f) : Colors.white,
                   size: talkActive ? size * 0.22 : size * 0.18,
                 ),
               ),
