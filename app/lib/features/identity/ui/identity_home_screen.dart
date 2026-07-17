@@ -73,9 +73,6 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
   EventsListener<RoomEvent>? _roomListener;
   Timer? _heartbeatTimer;
 
-  late final PageController _carouselController = PageController(
-    viewportFraction: 0.78,
-  );
   int _carouselIndex = 0;
 
   bool _loadingGroups = true;
@@ -110,7 +107,6 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
     widget.identityRepository.sessionListenable.removeListener(
       _onIdentitySessionChanged,
     );
-    _carouselController.dispose();
     _availabilitySubscription?.cancel();
     _availabilityExpiryTimer?.cancel();
     _membersSubscription?.cancel();
@@ -384,12 +380,6 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
     if (index < 0) return;
 
     _carouselIndex = index;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_carouselController.hasClients) return;
-      if (_carouselController.page?.round() != index) {
-        _carouselController.jumpToPage(index);
-      }
-    });
   }
 
   void _openCreateGroup() {
@@ -560,13 +550,6 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
                     );
                     if (index >= 0) {
                       unawaited(_onGroupCarouselChanged(index));
-                      if (_carouselController.hasClients) {
-                        _carouselController.animateToPage(
-                          index,
-                          duration: const Duration(milliseconds: 280),
-                          curve: Curves.easeOutCubic,
-                        );
-                      }
                     }
                   },
                   title: Text(
@@ -1471,14 +1454,13 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
                 SizedBox(
                   height: 200.h,
                   child: _ExperienceCarousel(
-                    controller: _carouselController,
                     items: items,
                     index: _carouselIndex,
                     talkEnabled: _isOnline && !_busy,
                     talkActive: _talkSession != null,
                     talkBusy: _talkBusy,
                     accent: accent,
-                    onPageChanged: (index) {
+                    onSelected: (index) {
                       unawaited(_onGroupCarouselChanged(index));
                     },
                     onTalkStart: _startTalking,
@@ -2455,49 +2437,208 @@ class _CarouselDotIndicator extends StatelessWidget {
   }
 }
 
-class _ExperienceCarousel extends StatelessWidget {
+class _ExperienceCarousel extends StatefulWidget {
   const _ExperienceCarousel({
-    required this.controller,
     required this.items,
     required this.index,
     required this.talkEnabled,
     required this.talkActive,
     required this.talkBusy,
     required this.accent,
-    required this.onPageChanged,
+    required this.onSelected,
     required this.onTalkStart,
     required this.onTalkStop,
     required this.onCreateGroup,
     required this.onJoinGroup,
   });
 
-  final PageController controller;
   final List<_CarouselItem> items;
   final int index;
   final bool talkEnabled;
   final bool talkActive;
   final bool talkBusy;
   final Color accent;
-  final ValueChanged<int> onPageChanged;
+  final ValueChanged<int> onSelected;
   final Future<void> Function() onTalkStart;
   final Future<void> Function() onTalkStop;
   final VoidCallback onCreateGroup;
   final VoidCallback onJoinGroup;
 
   @override
+  State<_ExperienceCarousel> createState() => _ExperienceCarouselState();
+}
+
+class _ExperienceCarouselState extends State<_ExperienceCarousel>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _settleController = AnimationController(
+    vsync: this,
+  );
+  late double _position = widget.index.toDouble();
+  Animation<double>? _settleAnimation;
+  double _itemSpacing = 64;
+  int? _selectionAfterSettle;
+
+  @override
+  void initState() {
+    super.initState();
+    _settleController.addListener(_onSettleTick);
+    _settleController.addStatusListener(_onSettleStatus);
+  }
+
+  @override
+  void didUpdateWidget(covariant _ExperienceCarousel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    if (widget.items.isEmpty) {
+      _settleController.stop();
+      _position = 0;
+      return;
+    }
+
+    final lastIndex = widget.items.length - 1;
+    _position = _position.clamp(0, lastIndex).toDouble();
+    if (widget.index != oldWidget.index &&
+        widget.index != _position.round() &&
+        !_settleController.isAnimating) {
+      _animateTo(widget.index, notifySelection: false);
+    }
+  }
+
+  @override
+  void dispose() {
+    _settleController
+      ..removeListener(_onSettleTick)
+      ..removeStatusListener(_onSettleStatus)
+      ..dispose();
+    super.dispose();
+  }
+
+  void _onSettleTick() {
+    final animation = _settleAnimation;
+    if (animation == null || !mounted) return;
+    setState(() => _position = animation.value);
+  }
+
+  void _onSettleStatus(AnimationStatus status) {
+    if (status != AnimationStatus.completed) return;
+    final selection = _selectionAfterSettle;
+    _selectionAfterSettle = null;
+    if (selection == null || selection == widget.index) return;
+    unawaited(HapticFeedback.selectionClick());
+    widget.onSelected(selection);
+  }
+
+  void _animateTo(int target, {required bool notifySelection}) {
+    if (widget.items.isEmpty) return;
+    final resolvedTarget = target.clamp(0, widget.items.length - 1);
+    final distance = (_position - resolvedTarget).abs();
+
+    _settleController.stop();
+    _selectionAfterSettle = notifySelection ? resolvedTarget : null;
+    _settleController.duration = Duration(
+      milliseconds: (220 + distance * 45).clamp(220, 420).round(),
+    );
+    _settleAnimation =
+        Tween<double>(begin: _position, end: resolvedTarget.toDouble()).animate(
+          CurvedAnimation(
+            parent: _settleController,
+            curve: Curves.easeOutCubic,
+          ),
+        );
+    _settleController.forward(from: 0);
+  }
+
+  void _onHorizontalDragStart(DragStartDetails details) {
+    _selectionAfterSettle = null;
+    _settleController.stop();
+  }
+
+  void _onHorizontalDragUpdate(DragUpdateDetails details) {
+    if (widget.items.length < 2) return;
+    final next = _position - details.delta.dx / _itemSpacing;
+    setState(() {
+      _position = next.clamp(0, widget.items.length - 1).toDouble();
+    });
+  }
+
+  void _onHorizontalDragEnd(DragEndDetails details) {
+    if (widget.items.isEmpty) return;
+    final projected = _position - details.velocity.pixelsPerSecond.dx / 1000;
+    _animateTo(projected.round(), notifySelection: true);
+  }
+
+  void _onHorizontalDragCancel() {
+    if (widget.items.isEmpty) return;
+    _animateTo(_position.round(), notifySelection: true);
+  }
+
+  Widget _buildGroupCircle(int itemIndex, double spacing) {
+    final item = widget.items[itemIndex];
+    final delta = itemIndex - _position;
+    final distance = delta.abs();
+    final visualFocus = _position.round().clamp(0, widget.items.length - 1);
+    final visuallySelected = itemIndex == visualFocus;
+    final actuallySelected = itemIndex == widget.index;
+    final scale = (1 / (1 + distance * 0.38)).clamp(0.42, 1.0);
+    final opacity = (1 - distance * 0.18).clamp(0.28, 1.0);
+    final rotationY = (delta * -0.26).clamp(-0.62, 0.62);
+
+    Widget circle = _MainAvatarCircle(
+      item: item,
+      selected: visuallySelected,
+      talkEnabled: widget.talkEnabled && actuallySelected && distance < 0.45,
+      talkActive: widget.talkActive && actuallySelected,
+      talkBusy: widget.talkBusy,
+      accent: widget.accent,
+      onTalkStart: widget.onTalkStart,
+      onTalkStop: widget.onTalkStop,
+    );
+
+    if (!actuallySelected) {
+      circle = Semantics(
+        button: true,
+        label: 'Select ${item.group.name} group',
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => _animateTo(itemIndex, notifySelection: true),
+          child: circle,
+        ),
+      );
+    }
+
+    return Positioned.fill(
+      child: Center(
+        child: Transform.translate(
+          offset: Offset(delta * spacing, distance * 7.h),
+          child: Opacity(
+            opacity: opacity,
+            child: Transform(
+              alignment: Alignment.center,
+              transform: Matrix4.identity()
+                ..setEntry(3, 2, 0.0014)
+                ..rotateY(rotationY),
+              child: Transform.scale(scale: scale, child: circle),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
-    if (items.isEmpty) {
+    if (widget.items.isEmpty) {
       return Row(
         children: [
           SizedBox(width: 16.w),
           _DashedAddCircle(
-            onTap: onJoinGroup,
+            onTap: widget.onJoinGroup,
             compact: true,
             label: '+ join\ngroup',
           ),
           const Spacer(),
           _DashedAddCircle(
-            onTap: onCreateGroup,
+            onTap: widget.onCreateGroup,
             compact: true,
             label: '+ create\nnew group',
           ),
@@ -2506,86 +2647,56 @@ class _ExperienceCarousel extends StatelessWidget {
       );
     }
 
-    final has3d = items.length > 1;
-
     return Row(
       children: [
-        SizedBox(width: 16.w),
+        SizedBox(width: 12.w),
         _DashedAddCircle(
-          onTap: onJoinGroup,
+          onTap: widget.onJoinGroup,
           compact: true,
           label: '+ join\ngroup',
         ),
-        SizedBox(width: 12.w),
+        SizedBox(width: 8.w),
         Expanded(
-          child: PageView.builder(
-            controller: controller,
-            itemCount: items.length,
-            onPageChanged: onPageChanged,
-            itemBuilder: (context, itemIndex) {
-              final item = items[itemIndex];
-              final selected = itemIndex == index;
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final spacing = (constraints.maxWidth * 0.34).clamp(52.w, 70.w);
+              _itemSpacing = spacing;
+              final paintOrder =
+                  List<int>.generate(
+                    widget.items.length,
+                    (itemIndex) => itemIndex,
+                  )..sort((a, b) {
+                    final aDistance = (a - _position).abs();
+                    final bDistance = (b - _position).abs();
+                    return bDistance.compareTo(aDistance);
+                  });
 
-              final avatar = Center(
-                child: _MainAvatarCircle(
-                  item: item,
-                  selected: selected,
-                  talkEnabled: talkEnabled && selected,
-                  talkActive: talkActive && selected,
-                  talkBusy: talkBusy,
-                  accent: accent,
-                  onTalkStart: onTalkStart,
-                  onTalkStop: onTalkStop,
+              return ClipRect(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onHorizontalDragStart: _onHorizontalDragStart,
+                  onHorizontalDragUpdate: _onHorizontalDragUpdate,
+                  onHorizontalDragEnd: _onHorizontalDragEnd,
+                  onHorizontalDragCancel: _onHorizontalDragCancel,
+                  child: Stack(
+                    clipBehavior: Clip.hardEdge,
+                    children: [
+                      for (final itemIndex in paintOrder)
+                        _buildGroupCircle(itemIndex, spacing),
+                    ],
+                  ),
                 ),
-              );
-
-              if (!has3d) {
-                return AnimatedScale(
-                  scale: selected ? 1.0 : 0.78,
-                  duration: const Duration(milliseconds: 220),
-                  curve: Curves.easeOutCubic,
-                  child: avatar,
-                );
-              }
-
-              // Light 3D card-stack feel: continuously tilt/scale/fade each
-              // card based on its live distance from the current page, so
-              // it reads as a swipeable stack rather than a flat list.
-              return AnimatedBuilder(
-                animation: controller,
-                builder: (context, child) {
-                  var page = index.toDouble();
-                  if (controller.hasClients) {
-                    page = controller.page ?? index.toDouble();
-                  }
-                  final delta = (itemIndex - page).clamp(-1.4, 1.4);
-                  final scale = (1 - delta.abs() * 0.24).clamp(0.7, 1.0);
-                  final opacity = (1 - delta.abs() * 0.35).clamp(0.45, 1.0);
-                  final rotationY = delta * 0.55;
-
-                  return Opacity(
-                    opacity: opacity,
-                    child: Transform(
-                      alignment: Alignment.center,
-                      transform: Matrix4.identity()
-                        ..setEntry(3, 2, 0.0012)
-                        ..rotateY(rotationY),
-                      child: Transform.scale(scale: scale, child: child),
-                    ),
-                  );
-                },
-                child: avatar,
               );
             },
           ),
         ),
-        SizedBox(width: 12.w),
+        SizedBox(width: 8.w),
         _DashedAddCircle(
-          onTap: onCreateGroup,
+          onTap: widget.onCreateGroup,
           compact: true,
           label: '+ create\nnew group',
         ),
-        SizedBox(width: 16.w),
+        SizedBox(width: 12.w),
       ],
     );
   }
@@ -2614,7 +2725,7 @@ class _MainAvatarCircle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final size = selected ? 124.w : 104.w;
+    final size = 124.w;
 
     Widget circle = Container(
       width: size,
@@ -2857,7 +2968,7 @@ class _DashedAddCircle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final size = compact ? 84.w : 110.w;
+    final size = compact ? 72.w : 110.w;
     return GestureDetector(
       onTap: onTap,
       child: Opacity(
@@ -2877,7 +2988,7 @@ class _DashedAddCircle extends StatelessWidget {
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     color: Colors.white,
-                    fontSize: compact ? 10.sp : 12.sp,
+                    fontSize: compact ? 9.sp : 12.sp,
                     fontWeight: FontWeight.w600,
                     height: 1.15,
                   ),
