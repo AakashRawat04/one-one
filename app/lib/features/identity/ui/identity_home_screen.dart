@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:ui';
 
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/material.dart';
@@ -57,6 +58,7 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
   late IdentitySession _session;
   List<GroupSummary> _groups = const [];
   List<GroupMemberSummary> _members = const [];
+  Map<String, List<GroupMemberSummary>> _membersByGroupId = const {};
   Map<String, MemberAvailability> _availability = const {};
   Map<String, bool> _handRaises = const {};
   Set<String> _speakingUserIds = const {};
@@ -168,13 +170,20 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
 
       final groups = resolution.groups;
       final selected = _resolveSelectedGroup(groups);
+      final membersByGroupId = await _loadAllGroupMembers(groups);
+      await _precacheGroupMemberPhotos(
+        membersByGroupId.values.expand((members) => members),
+      );
 
       if (!mounted) return;
       setState(() {
         _groups = groups;
         _selectedGroup = selected;
+        _membersByGroupId = membersByGroupId;
+        _members = selected == null
+            ? const []
+            : membersByGroupId[selected.groupId] ?? const [];
         if (selected == null) {
-          _members = const [];
           _availability = const {};
         }
       });
@@ -191,7 +200,6 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
       }
 
       if (selected != null) {
-        await _loadMembers(selected.groupId);
         _listenToMembers(selected.groupId);
         _listenToAvailability(selected.groupId);
         _listenToHandRaises(selected.groupId);
@@ -227,7 +235,46 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
   Future<void> _loadMembers(String groupId) async {
     final members = await _groupRepository.loadGroupMembers(groupId);
     if (!mounted || _selectedGroup?.groupId != groupId) return;
-    setState(() => _members = members);
+    setState(() {
+      _members = members;
+      _membersByGroupId = {..._membersByGroupId, groupId: members};
+    });
+  }
+
+  Future<Map<String, List<GroupMemberSummary>>> _loadAllGroupMembers(
+    List<GroupSummary> groups,
+  ) async {
+    final entries = await Future.wait(
+      groups.map((group) async {
+        final members = await _groupRepository.loadGroupMembers(group.groupId);
+        return MapEntry(group.groupId, members);
+      }),
+    );
+    return Map<String, List<GroupMemberSummary>>.fromEntries(entries);
+  }
+
+  Future<void> _precacheGroupMemberPhotos(
+    Iterable<GroupMemberSummary> members,
+  ) async {
+    final urls = members
+        .map((member) => member.profilePhotoUrl?.trim())
+        .whereType<String>()
+        .where((url) => url.isNotEmpty)
+        .toSet();
+
+    await Future.wait(
+      urls.map((url) async {
+        try {
+          await precacheImage(
+            CachedNetworkImageProvider(url),
+            context,
+            onError: (error, stackTrace) {},
+          );
+        } catch (_) {
+          // A broken member photo falls back to initials in ProfileImage.
+        }
+      }),
+    );
   }
 
   void _listenToMembers(String groupId) {
@@ -343,14 +390,17 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
     }
 
     final group = _groups.firstWhere((item) => item.groupId == groupId);
+    final cachedMembers = _membersByGroupId[groupId];
     setState(() {
       _selectedGroup = group;
-      _members = const [];
+      _members = cachedMembers ?? const [];
       _availability = const {};
       _handRaises = const {};
       _speakingUserIds = const {};
     });
-    await _loadMembers(group.groupId);
+    if (cachedMembers == null) {
+      await _loadMembers(group.groupId);
+    }
     _listenToMembers(group.groupId);
     _listenToAvailability(group.groupId);
     _listenToHandRaises(group.groupId);
@@ -1321,7 +1371,13 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
   }
 
   List<GroupMemberSummary> get _displayMembers {
-    return _members
+    return _displayMembersFrom(_members);
+  }
+
+  List<GroupMemberSummary> _displayMembersFrom(
+    List<GroupMemberSummary> members,
+  ) {
+    return members
         .map((member) {
           if (member.userId != _session.userId) return member;
           return GroupMemberSummary(
@@ -1368,9 +1424,9 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
           availability: group.groupId == _selectedGroup?.groupId
               ? selfAvailability
               : MemberAvailability.away,
-          members: group.groupId == _selectedGroup?.groupId
-              ? _displayMembers
-              : const [],
+          members: _displayMembersFrom(
+            _membersByGroupId[group.groupId] ?? const [],
+          ),
         ),
     ];
   }
@@ -2579,7 +2635,7 @@ class _ExperienceCarouselState extends State<_ExperienceCarousel>
     final visualFocus = _position.round().clamp(0, widget.items.length - 1);
     final visuallySelected = itemIndex == visualFocus;
     final actuallySelected = itemIndex == widget.index;
-    final scale = (1 / (1 + distance * 0.38)).clamp(0.42, 1.0);
+    final scale = (1 / (1 + distance * 0.46)).clamp(0.4, 1.0);
     final opacity = (1 - distance * 0.18).clamp(0.28, 1.0);
     final rotationY = (delta * -0.26).clamp(-0.62, 0.62);
 
@@ -2672,19 +2728,51 @@ class _ExperienceCarouselState extends State<_ExperienceCarousel>
                   });
 
               return ClipRect(
-                child: GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onHorizontalDragStart: _onHorizontalDragStart,
-                  onHorizontalDragUpdate: _onHorizontalDragUpdate,
-                  onHorizontalDragEnd: _onHorizontalDragEnd,
-                  onHorizontalDragCancel: _onHorizontalDragCancel,
-                  child: Stack(
-                    clipBehavior: Clip.hardEdge,
-                    children: [
-                      for (final itemIndex in paintOrder)
-                        _buildGroupCircle(itemIndex, spacing),
-                    ],
-                  ),
+                child: Stack(
+                  children: [
+                    Positioned.fill(
+                      child: ShaderMask(
+                        blendMode: BlendMode.dstIn,
+                        shaderCallback: (bounds) => const LinearGradient(
+                          colors: [
+                            Colors.transparent,
+                            Colors.white,
+                            Colors.white,
+                            Colors.transparent,
+                          ],
+                          stops: [0, 0.14, 0.86, 1],
+                        ).createShader(bounds),
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onHorizontalDragStart: _onHorizontalDragStart,
+                          onHorizontalDragUpdate: _onHorizontalDragUpdate,
+                          onHorizontalDragEnd: _onHorizontalDragEnd,
+                          onHorizontalDragCancel: _onHorizontalDragCancel,
+                          child: Stack(
+                            clipBehavior: Clip.hardEdge,
+                            children: [
+                              for (final itemIndex in paintOrder)
+                                _buildGroupCircle(itemIndex, spacing),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    const Positioned(
+                      left: 0,
+                      top: 0,
+                      bottom: 0,
+                      width: 24,
+                      child: _CarouselEdgeVeil(leftEdge: true),
+                    ),
+                    const Positioned(
+                      right: 0,
+                      top: 0,
+                      bottom: 0,
+                      width: 24,
+                      child: _CarouselEdgeVeil(leftEdge: false),
+                    ),
+                  ],
                 ),
               );
             },
@@ -2698,6 +2786,32 @@ class _ExperienceCarouselState extends State<_ExperienceCarousel>
         ),
         SizedBox(width: 12.w),
       ],
+    );
+  }
+}
+
+class _CarouselEdgeVeil extends StatelessWidget {
+  const _CarouselEdgeVeil({required this.leftEdge});
+
+  final bool leftEdge;
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      child: ClipRect(
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: leftEdge ? Alignment.centerLeft : Alignment.centerRight,
+                end: leftEdge ? Alignment.centerRight : Alignment.centerLeft,
+                colors: const [Color(0x26000000), Colors.transparent],
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -2725,7 +2839,7 @@ class _MainAvatarCircle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final size = 124.w;
+    final size = 110.w;
 
     Widget circle = Container(
       width: size,
@@ -2816,6 +2930,7 @@ class _MemberPhotoCollage extends StatelessWidget {
         profilePhotoUrl: fallbackPhotoUrl,
         profilePhotoBase64: fallbackPhotoBase64,
         backgroundColor: const Color(0xff2a2a2a),
+        fadeInDuration: Duration.zero,
         fallback: Icon(
           Icons.person_outline,
           color: Colors.white70,
@@ -2835,6 +2950,7 @@ class _MemberPhotoCollage extends StatelessWidget {
         profilePhotoUrl: member.profilePhotoUrl,
         profilePhotoBase64: member.profilePhotoBase64,
         backgroundColor: const Color(0xff2a2a2a),
+        fadeInDuration: Duration.zero,
         fallback: Text(
           initial,
           style: TextStyle(

@@ -18,6 +18,7 @@ class ProfileImage extends StatelessWidget {
     this.backgroundColor,
     this.fallback,
     this.fit = BoxFit.cover,
+    this.fadeInDuration = const Duration(milliseconds: 150),
   });
 
   final String? profilePhotoUrl;
@@ -25,6 +26,7 @@ class ProfileImage extends StatelessWidget {
   final Color? backgroundColor;
   final Widget? fallback;
   final BoxFit fit;
+  final Duration fadeInDuration;
 
   @override
   Widget build(BuildContext context) {
@@ -32,8 +34,7 @@ class ProfileImage extends StatelessWidget {
     final resolvedBackgroundColor =
         backgroundColor ?? colors.surfaceContainerHighest;
     final resolvedFallback =
-        fallback ??
-        Icon(Icons.person_outline, color: colors.onSurfaceVariant);
+        fallback ?? Icon(Icons.person_outline, color: colors.onSurfaceVariant);
 
     final url = profilePhotoUrl?.trim();
     if (url != null && url.isNotEmpty) {
@@ -42,8 +43,8 @@ class ProfileImage extends StatelessWidget {
         child: CachedNetworkImage(
           imageUrl: url,
           fit: fit,
-          fadeInDuration: const Duration(milliseconds: 150),
-          placeholder: (context, url) => const SizedBox.shrink(),
+          fadeInDuration: fadeInDuration,
+          placeholder: (context, url) => Center(child: resolvedFallback),
           errorWidget: (context, url, error) {
             // Surface Cloudinary/network failures instead of failing silently.
             debugPrint('ProfileImage: failed to load "$url": $error');
