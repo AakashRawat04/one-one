@@ -7,19 +7,47 @@ import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 
 class VoiceNudgeMessagingService : FirebaseMessagingService() {
-    override fun onNewToken(token: String) {
-        VoiceNudgeTokenStore.save(this, token)
+    override fun onRegistered(installationId: String) {
+        Log.i(
+            VoiceNudgeDiagnostics.tag,
+            "[FCM-06] onRegistered callback " +
+                VoiceNudgeDiagnostics.describeIdentifier(installationId),
+        )
+        VoiceNudgeTokenStore.save(this, installationId)
     }
 
     override fun onMessageReceived(message: RemoteMessage) {
         val data = message.data
-        val kind = data["type"] ?: return
-        if (kind != VoiceNudgeContract.kindVoice && kind != VoiceNudgeContract.kindRing) return
+        Log.i(
+            VoiceNudgeDiagnostics.tag,
+            "[FCM-07] Message received id=${message.messageId ?: "none"} " +
+                "keys=${data.keys.sorted().joinToString(",")}",
+        )
+        val kind = data["type"]
+        if (kind == null) {
+            Log.w(VoiceNudgeDiagnostics.tag, "[FCM-W1] Ignored message without type")
+            return
+        }
+        if (kind != VoiceNudgeContract.kindVoice && kind != VoiceNudgeContract.kindRing) {
+            Log.i(VoiceNudgeDiagnostics.tag, "[FCM-08] Flutter-handled message type=$kind")
+            return
+        }
 
-        val eventId = data["eventId"] ?: return
+        val eventId = data["eventId"]
+        if (eventId == null) {
+            Log.w(VoiceNudgeDiagnostics.tag, "[FCM-W2] Ignored $kind without eventId")
+            return
+        }
         val senderName = data["senderName"]?.take(80).orEmpty().ifBlank { "Someone" }
-        val durationMs = data["durationMs"]?.toLongOrNull()?.coerceIn(250L, 10_000L) ?: return
-        if (kind == VoiceNudgeContract.kindVoice && isExpired(data["expiresAt"])) return
+        val durationMs = data["durationMs"]?.toLongOrNull()?.coerceIn(250L, 10_000L)
+        if (durationMs == null) {
+            Log.w(VoiceNudgeDiagnostics.tag, "[FCM-W3] Ignored $kind with invalid duration")
+            return
+        }
+        if (kind == VoiceNudgeContract.kindVoice && isExpired(data["expiresAt"])) {
+            Log.w(VoiceNudgeDiagnostics.tag, "[FCM-W4] Ignored expired voice nudge")
+            return
+        }
 
         val intent = Intent(this, VoiceNudgePlaybackService::class.java).apply {
             putExtra(VoiceNudgeContract.extraKind, kind)
@@ -32,13 +60,17 @@ class VoiceNudgeMessagingService : FirebaseMessagingService() {
         }
 
         try {
+            Log.i(
+                VoiceNudgeDiagnostics.tag,
+                "[FCM-09] Starting native playback kind=$kind eventSuffix=${eventId.takeLast(6)}",
+            )
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 startForegroundService(intent)
             } else {
                 startService(intent)
             }
         } catch (error: RuntimeException) {
-            Log.e("VoiceNudge", "Unable to start voice nudge playback", error)
+            VoiceNudgeDiagnostics.logFailure("[FCM-E3] Native playback start", error)
             val manager = getSystemService(NOTIFICATION_SERVICE) as android.app.NotificationManager
             manager.notify(
                 VoiceNudgeNotifications.idFor(eventId),
@@ -50,6 +82,13 @@ class VoiceNudgeMessagingService : FirebaseMessagingService() {
                 ),
             )
         }
+    }
+
+    override fun onDeletedMessages() {
+        Log.w(
+            VoiceNudgeDiagnostics.tag,
+            "[FCM-W5] FCM deleted pending messages before delivery",
+        )
     }
 
     private fun isExpired(rawExpiry: String?): Boolean {

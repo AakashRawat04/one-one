@@ -19,6 +19,19 @@ Ordinary Push nudges continue to use an FCM notification payload.
 
 ## Required backend configuration
 
+In Firebase Console, open **Project settings > Cloud Messaging** and enable the
+Cloud Messaging API. In Google Cloud Console, verify that the API key referenced
+by `app/android/app/google-services.json` is allowed to call:
+
+```txt
+firebaseinstallations.googleapis.com
+fcmregistrations.googleapis.com
+```
+
+These are the Firebase Installations API and FCM Registration API. The Android
+app contains only the Firebase client configuration. Never copy a service-account
+private key or legacy FCM server key into the app.
+
 Set these values in the deployed backend:
 
 ```txt
@@ -44,7 +57,8 @@ rule covers devices that never reconnect and backend interruptions.
 
 ## Device prerequisites
 
-- Google Play services and a valid `android/app/google-services.json`.
+- Current Google Play services and a valid `android/app/google-services.json`
+  whose Android package is `app.oneone.one_one_app`.
 - Microphone permission for the sender.
 - Notification permission for reliable user-visible high-priority delivery.
 - The recipient app must have been opened at least once and must not be
@@ -56,7 +70,8 @@ rule covers devices that never reconnect and backend interruptions.
 Use two physical Android devices signed into different group members:
 
 1. Open both apps once and confirm each `userDevices` record contains an
-   `fcmToken` and `platform: android`.
+   `fcmToken` and `platform: android`. For new installs, the compatibility-named
+   `fcmToken` field contains the registered Firebase Installation ID.
 2. Lock the receiver, send a three-second Ring nudge, and confirm playback plus
    the foreground notification.
 3. Swipe the receiver from Recents, send a Voice nudge, and confirm it downloads

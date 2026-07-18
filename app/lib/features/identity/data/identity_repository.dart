@@ -69,6 +69,10 @@ class IdentityRepository {
     final fcmToken = Platform.isAndroid
         ? await _optionalStartupValue(AndroidVoiceNudgeBridge().getFcmToken())
         : null;
+    debugPrint(
+      '[OneOneFCM][DART-03] Identity startup registrationAvailable='
+      '${fcmToken != null}',
+    );
 
     final localSession = IdentitySession(
       user: AppUserProfile(
@@ -113,8 +117,15 @@ class IdentityRepository {
     );
 
     if (syncedSession != null) {
+      debugPrint(
+        '[OneOneFCM][DART-05] Device registration synchronized to Firebase',
+      );
       return syncedSession;
     }
+
+    debugPrint(
+      '[OneOneFCM][DART-W1] Initial device sync did not complete; retry queued',
+    );
 
     unawaited(
       _syncRemoteIdentityState(
@@ -447,6 +458,13 @@ class IdentityRepository {
     );
 
     await ref.set(device.toJson());
+    debugPrint(
+      '[OneOneFCM][DART-04] userDevices record written '
+      'userSuffix=${_diagnosticSuffix(userId)} '
+      'deviceSuffix=${_diagnosticSuffix(localDevice.deviceId)} '
+      'registrationAvailable=${resolvedFcmToken != null} '
+      'registrationSource=${fcmToken != null ? 'current' : 'existing_or_missing'}',
+    );
     return device;
   }
 
@@ -479,7 +497,11 @@ class IdentityRepository {
       );
       _publishSession(session);
       return session;
-    } catch (_) {
+    } catch (error) {
+      debugPrint(
+        '[OneOneFCM][DART-E4] Firebase device sync failed '
+        '${error.runtimeType}: $error',
+      );
       // Keep startup responsive even if the database sync is slow or fails.
       return null;
     }
@@ -639,3 +661,6 @@ int _readInt(Object? value, {required int fallback}) {
   if (value is num) return value.toInt();
   return int.tryParse(value?.toString() ?? '') ?? fallback;
 }
+
+String _diagnosticSuffix(String value) =>
+    value.length <= 6 ? value : value.substring(value.length - 6);

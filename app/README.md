@@ -2,7 +2,7 @@
 
 Android-first Flutter client for the One One LiveKit walkie-talkie app.
 
-Phase 3 currently starts the app through Firebase anonymous auth and device registration.
+The app starts through Google-backed Firebase Authentication and device registration.
 
 Before running after Phase 3, add:
 
@@ -49,6 +49,13 @@ been force-stopped and the device is online.
 
 Deploy the backend and Firebase rules described in
 `requirements/android-nudge-delivery.md` before device testing.
+For registration and delivery diagnosis, follow
+`requirements/fcm-end-to-end-checklist.md` in order.
+
+FCM registration uses the Firebase Installation ID flow in Firebase Messaging
+25+. In Firebase, enable the Cloud Messaging API and ensure the Android Firebase
+API key allows both the Firebase Installations API and FCM Registration API.
+Do not put a service-account key or legacy FCM server key in the app.
 
 ## Run
 

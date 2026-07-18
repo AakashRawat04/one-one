@@ -1,6 +1,7 @@
 package app.oneone.one_one_app
 
 import android.content.Context
+import android.util.Log
 
 object VoiceNudgeContract {
     const val flutterChannel = "app.oneone/voice_nudge"
@@ -28,5 +29,36 @@ object VoiceNudgeTokenStore {
             .edit()
             .putString(tokenKey, token)
             .apply()
+        Log.i(
+            VoiceNudgeDiagnostics.tag,
+            "[FCM-05] Registered identifier saved locally " +
+                VoiceNudgeDiagnostics.describeIdentifier(token),
+        )
+    }
+}
+
+object VoiceNudgeDiagnostics {
+    const val tag = "OneOneFCM"
+
+    fun describeIdentifier(value: String): String =
+        "length=${value.length} suffix=${value.takeLast(6)}"
+
+    fun logFailure(checkpoint: String, error: Throwable?) {
+        if (error == null) {
+            Log.e(tag, "$checkpoint failed without an exception")
+            return
+        }
+
+        Log.e(tag, "$checkpoint ${error.javaClass.name}: ${error.message}", error)
+        var cause = error.cause
+        var depth = 1
+        while (cause != null && cause !== error && depth <= 6) {
+            Log.e(
+                tag,
+                "$checkpoint cause[$depth]=${cause.javaClass.name}: ${cause.message}",
+            )
+            cause = cause.cause
+            depth += 1
+        }
     }
 }

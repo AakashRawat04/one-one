@@ -66,6 +66,7 @@ flutter {
 
 dependencies {
     implementation(platform("com.google.firebase:firebase-bom:34.15.0"))
+    implementation("com.google.firebase:firebase-installations")
     implementation("com.google.firebase:firebase-messaging")
     implementation("androidx.media3:media3-exoplayer:1.10.1")
 }

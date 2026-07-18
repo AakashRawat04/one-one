@@ -35,7 +35,16 @@ class VoiceNudgePlaybackService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val request = intent?.toRequest() ?: return START_NOT_STICKY
+        val request = intent?.toRequest()
+        if (request == null) {
+            Log.w(VoiceNudgeDiagnostics.tag, "[FCM-W6] Playback service received invalid intent")
+            return START_NOT_STICKY
+        }
+        Log.i(
+            VoiceNudgeDiagnostics.tag,
+            "[FCM-10] Playback service accepted kind=${request.kind} " +
+                "eventSuffix=${request.eventId.takeLast(6)}",
+        )
         startForeground(
             VoiceNudgeNotifications.idFor(request.eventId),
             VoiceNudgeNotifications.build(this, request.senderName, "Preparing nudge…", true),
@@ -58,6 +67,10 @@ class VoiceNudgePlaybackService : Service() {
         if (active != null || queue.isEmpty()) return
         val request = queue.removeFirst()
         active = request
+        Log.i(
+            VoiceNudgeDiagnostics.tag,
+            "[FCM-11] Processing queued nudge kind=${request.kind}",
+        )
         notify(request, if (request.kind == VoiceNudgeContract.kindRing) "Ringing…" else "Downloading voice nudge…")
         if (request.kind == VoiceNudgeContract.kindRing) {
             playRing(request)
@@ -68,12 +81,16 @@ class VoiceNudgePlaybackService : Service() {
 
     private fun playRing(request: NudgeRequest) {
         try {
+            Log.i(
+                VoiceNudgeDiagnostics.tag,
+                "[FCM-12] Starting ring durationMs=${request.durationMs}",
+            )
             toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, 90).also {
                 it.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, request.durationMs.toInt())
             }
             mainHandler.postDelayed({ finishActive(success = true) }, request.durationMs)
         } catch (error: RuntimeException) {
-            Log.e("VoiceNudge", "Unable to play ring nudge", error)
+            VoiceNudgeDiagnostics.logFailure("[FCM-E4] Ring playback", error)
             finishActive(success = false)
         }
     }
@@ -82,9 +99,13 @@ class VoiceNudgePlaybackService : Service() {
         networkExecutor.execute {
             try {
                 val file = downloadAudio(request)
+                Log.i(
+                    VoiceNudgeDiagnostics.tag,
+                    "[FCM-13] Voice audio downloaded bytes=${file.length()}",
+                )
                 mainHandler.post { startPlayer(request, file) }
             } catch (error: Exception) {
-                Log.e("VoiceNudge", "Unable to download voice nudge", error)
+                VoiceNudgeDiagnostics.logFailure("[FCM-E5] Voice audio download", error)
                 acknowledge(request, "failed") { finishActive(success = false) }
             }
         }
@@ -100,8 +121,13 @@ class VoiceNudgePlaybackService : Service() {
         connection.setRequestProperty("x-one-one-delivery-token", deliveryToken)
         connection.setRequestProperty("accept", "audio/mp4")
         try {
-            if (connection.responseCode !in 200..299) {
-                throw IllegalStateException("Audio download failed with HTTP ${connection.responseCode}")
+            val responseCode = connection.responseCode
+            Log.i(
+                VoiceNudgeDiagnostics.tag,
+                "[FCM-13A] Voice audio HTTP response=$responseCode",
+            )
+            if (responseCode !in 200..299) {
+                throw IllegalStateException("Audio download failed with HTTP $responseCode")
             }
             val output = File(cacheDir, "voice_nudge_${request.eventId.safeFileName()}.m4a")
             connection.inputStream.use { input ->
@@ -130,6 +156,7 @@ class VoiceNudgePlaybackService : Service() {
             return
         }
         notify(request, "Playing voice nudge…")
+        Log.i(VoiceNudgeDiagnostics.tag, "[FCM-14] Preparing voice audio player")
         player = ExoPlayer.Builder(this).build().apply {
             setAudioAttributes(
                 AudioAttributes.Builder()
@@ -142,6 +169,7 @@ class VoiceNudgePlaybackService : Service() {
             addListener(object : Player.Listener {
                 override fun onPlaybackStateChanged(playbackState: Int) {
                     if (playbackState == Player.STATE_ENDED) {
+                        Log.i(VoiceNudgeDiagnostics.tag, "[FCM-15] Voice playback completed")
                         acknowledge(request, "played") {
                             file.delete()
                             finishActive(success = true)
@@ -150,7 +178,7 @@ class VoiceNudgePlaybackService : Service() {
                 }
 
                 override fun onPlayerError(error: PlaybackException) {
-                    Log.e("VoiceNudge", "Unable to play voice nudge", error)
+                    VoiceNudgeDiagnostics.logFailure("[FCM-E6] Voice playback", error)
                     acknowledge(request, "failed") {
                         file.delete()
                         finishActive(success = false)
@@ -182,9 +210,13 @@ class VoiceNudgePlaybackService : Service() {
                 opened.setRequestProperty("content-type", "application/json")
                 opened.setRequestProperty("x-one-one-delivery-token", deliveryToken)
                 opened.outputStream.use { it.write("{\"status\":\"$status\"}".toByteArray()) }
-                opened.responseCode
+                val responseCode = opened.responseCode
+                Log.i(
+                    VoiceNudgeDiagnostics.tag,
+                    "[FCM-16] Delivery acknowledgement status=$status HTTP=$responseCode",
+                )
             } catch (error: Exception) {
-                Log.w("VoiceNudge", "Unable to acknowledge voice nudge", error)
+                VoiceNudgeDiagnostics.logFailure("[FCM-E7] Delivery acknowledgement", error)
             } finally {
                 connection?.disconnect()
                 mainHandler.post(after)
@@ -194,6 +226,10 @@ class VoiceNudgePlaybackService : Service() {
 
     private fun finishActive(success: Boolean) {
         val request = active ?: return
+        Log.i(
+            VoiceNudgeDiagnostics.tag,
+            "[FCM-17] Nudge finished kind=${request.kind} success=$success",
+        )
         releasePlayback()
         active = null
         val manager = getSystemService(NotificationManager::class.java)
