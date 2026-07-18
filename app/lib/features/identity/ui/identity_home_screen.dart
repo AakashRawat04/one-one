@@ -50,7 +50,8 @@ class IdentityHomeScreen extends StatefulWidget {
   State<IdentityHomeScreen> createState() => _IdentityHomeScreenState();
 }
 
-class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
+class _IdentityHomeScreenState extends State<IdentityHomeScreen>
+    with WidgetsBindingObserver {
   final GroupRepository _groupRepository = GroupRepository();
   final OnlineRepository _onlineRepository = OnlineRepository();
   final TalkRepository _talkRepository = TalkRepository();
@@ -91,10 +92,13 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
   List<InCallReaction> _floatingReactions = const [];
   final Map<String, Timer> _reactionDismissTimers = {};
   List<ConnectivityResult> _connectivity = const [];
+  bool _registrationRefreshInFlight = false;
+  DateTime? _lastRegistrationRefreshAt;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _session =
         widget.identityRepository.currentSession ?? widget.initialSession;
     widget.identityRepository.sessionListenable.addListener(
@@ -107,6 +111,7 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     widget.identityRepository.sessionListenable.removeListener(
       _onIdentitySessionChanged,
     );
@@ -124,6 +129,34 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
     unawaited(_disconnectLiveKit());
     unawaited(_clearOwnHandRaise());
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_refreshDeviceRegistration());
+    }
+  }
+
+  Future<void> _refreshDeviceRegistration() async {
+    final lastRefresh = _lastRegistrationRefreshAt;
+    if (_registrationRefreshInFlight ||
+        (lastRefresh != null &&
+            DateTime.now().difference(lastRefresh) <
+                const Duration(seconds: 30))) {
+      return;
+    }
+    _registrationRefreshInFlight = true;
+    try {
+      await widget.identityRepository.ensureIdentity();
+      _lastRegistrationRefreshAt = DateTime.now();
+    } catch (error) {
+      debugPrint(
+        '[OneOneFCM][DART-E5] Resume-time device registration refresh failed: $error',
+      );
+    } finally {
+      _registrationRefreshInFlight = false;
+    }
   }
 
   void _onIdentitySessionChanged() {

@@ -1,8 +1,12 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:permission_handler/permission_handler.dart';
 
-enum _SetupStep { mic, notification }
+enum _SetupStep { mic, notification, background }
 
 class SetupPermissionScreen extends StatefulWidget {
   const SetupPermissionScreen({
@@ -16,13 +20,38 @@ class SetupPermissionScreen extends StatefulWidget {
   State<SetupPermissionScreen> createState() => _SetupPermissionScreenState();
 }
 
-class _SetupPermissionScreenState extends State<SetupPermissionScreen> {
+class _SetupPermissionScreenState extends State<SetupPermissionScreen>
+    with WidgetsBindingObserver {
   static const Duration _stageTransitionDuration = Duration(milliseconds: 320);
 
   _SetupStep _step = _SetupStep.mic;
   bool _micGranted = false;
   bool _notificationGranted = false;
+  bool _backgroundGranted = false;
   bool _busy = false;
+  bool _completed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed &&
+        _step == _SetupStep.background &&
+        _busy &&
+        !_completed) {
+      unawaited(_finishBackgroundPermission());
+    }
+  }
 
   Future<void> _requestMicPermission() async {
     if (_busy || _step != _SetupStep.mic) return;
@@ -64,7 +93,64 @@ class _SetupPermissionScreenState extends State<SetupPermissionScreen> {
     await Future<void>.delayed(_stageTransitionDuration);
     if (!mounted) return;
 
-    await widget.onComplete();
+    setState(() {
+      _busy = false;
+      _step = _SetupStep.background;
+    });
+  }
+
+  Future<void> _requestBackgroundPermission() async {
+    if (_busy || _step != _SetupStep.background || _completed) return;
+    setState(() => _busy = true);
+
+    try {
+      if (Platform.isAndroid && !await _isBackgroundActivityAllowed()) {
+        await FlutterForegroundTask.requestIgnoreBatteryOptimization();
+      }
+      await _finishBackgroundPermission();
+    } catch (_) {
+      if (!mounted || _completed) return;
+      setState(() => _busy = false);
+      _showDeniedSnackBar(
+        'Allow background activity so nudges can reach you reliably.',
+      );
+    }
+  }
+
+  Future<void> _finishBackgroundPermission() async {
+    if (!mounted || _completed || _step != _SetupStep.background) return;
+
+    final granted = await _isBackgroundActivityAllowed();
+    if (!mounted || _completed) return;
+    if (!granted) {
+      setState(() => _busy = false);
+      _showDeniedSnackBar(
+        'Choose unrestricted background activity, then return to One One.',
+      );
+      return;
+    }
+
+    _completed = true;
+    setState(() => _backgroundGranted = true);
+    await Future<void>.delayed(_stageTransitionDuration);
+    if (!mounted) return;
+    try {
+      await widget.onComplete();
+    } catch (_) {
+      if (!mounted) return;
+      _completed = false;
+      setState(() => _busy = false);
+      _showDeniedSnackBar('Setup could not be completed. Please try again.');
+    }
+  }
+
+  Future<bool> _isBackgroundActivityAllowed() async {
+    if (!Platform.isAndroid) return true;
+    try {
+      return await FlutterForegroundTask.isIgnoringBatteryOptimizations;
+    } catch (_) {
+      return false;
+    }
   }
 
   void _showDeniedSnackBar(String message) {
@@ -112,25 +198,35 @@ class _SetupPermissionScreenState extends State<SetupPermissionScreen> {
                     ),
                   );
                 },
-                child: _step == _SetupStep.mic
-                    ? _PermissionCard(
-                        key: const ValueKey('mic-card'),
-                        iconColor: const Color(0xffffb020),
-                        icon: Icons.mic_rounded,
-                        title: 'mic',
-                        subtitle: 'so your friends can hear you\nwhen you talk...',
-                        checked: _micGranted,
-                        onTap: _requestMicPermission,
-                      )
-                    : _PermissionCard(
-                        key: const ValueKey('notification-card'),
-                        iconColor: const Color(0xffff5a5f),
-                        icon: Icons.notifications_rounded,
-                        title: 'notifications',
-                        subtitle: 'know when your friend are\ntalking to you',
-                        checked: _notificationGranted,
-                        onTap: _requestNotificationPermission,
-                      ),
+                child: switch (_step) {
+                  _SetupStep.mic => _PermissionCard(
+                      key: const ValueKey('mic-card'),
+                      iconColor: const Color(0xffffb020),
+                      icon: Icons.mic_rounded,
+                      title: 'mic',
+                      subtitle: 'so your friends can hear you\nwhen you talk...',
+                      checked: _micGranted,
+                      onTap: _requestMicPermission,
+                    ),
+                  _SetupStep.notification => _PermissionCard(
+                      key: const ValueKey('notification-card'),
+                      iconColor: const Color(0xffff5a5f),
+                      icon: Icons.notifications_rounded,
+                      title: 'notifications',
+                      subtitle: 'know when your friends are\ntalking to you',
+                      checked: _notificationGranted,
+                      onTap: _requestNotificationPermission,
+                    ),
+                  _SetupStep.background => _PermissionCard(
+                      key: const ValueKey('background-card'),
+                      iconColor: const Color(0xff4c8dff),
+                      icon: Icons.battery_saver_rounded,
+                      title: 'background activity',
+                      subtitle: 'receive nudges when one one\nisn\'t open',
+                      checked: _backgroundGranted,
+                      onTap: _requestBackgroundPermission,
+                    ),
+                },
               ),
               SizedBox(height: 28.h),
               Text(

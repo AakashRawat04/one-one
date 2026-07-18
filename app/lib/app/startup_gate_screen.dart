@@ -9,7 +9,6 @@ import '../features/identity/data/identity_repository.dart';
 import '../features/identity/models/identity_session.dart';
 import '../features/identity/ui/no_groups_screen.dart';
 import 'accent_theme.dart';
-import 'battery_optimization_screen.dart';
 import 'display_name_screen.dart';
 import 'profile_picture_screen.dart';
 import 'setup_permission_screen.dart';
@@ -84,19 +83,14 @@ class _StartupGateScreenState extends State<StartupGateScreen> {
                   setState(() {
                     _nextScreen = SetupPermissionScreen(
                       onComplete: () async {
+                        final readySession = await _identityRepository
+                            .ensureIdentity();
+                        await _markSetupComplete(readySession.userId);
                         if (!mounted) return;
                         setState(() {
-                          _nextScreen = BatteryOptimizationScreen(
-                            onComplete: () async {
-                              await _markSetupComplete(updatedSession.userId);
-                              if (!mounted) return;
-                              setState(() {
-                                _nextScreen = _GroupEntryBootstrap(
-                                  session: updatedSession,
-                                  identityRepository: _identityRepository,
-                                );
-                              });
-                            },
+                          _nextScreen = _GroupEntryBootstrap(
+                            session: readySession,
+                            identityRepository: _identityRepository,
                           );
                         });
                       },

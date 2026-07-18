@@ -76,6 +76,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late bool _hapticsEnabled = _session.settings.hapticsEnabled;
   late String _audioOutputPreference = _session.settings.audioOutputPreference;
   late String _persistedAccentColorKey = _session.settings.accentColorKey;
+  late bool _persistedHapticsEnabled = _session.settings.hapticsEnabled;
+  late String _persistedAudioOutputPreference =
+      _session.settings.audioOutputPreference;
   bool _saving = false;
   bool _photoSaving = false;
   bool _accountActionInProgress = false;
@@ -92,6 +95,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _hapticsEnabled = currentSession.settings.hapticsEnabled;
       _audioOutputPreference = currentSession.settings.audioOutputPreference;
       _persistedAccentColorKey = currentSession.settings.accentColorKey;
+      _persistedHapticsEnabled = currentSession.settings.hapticsEnabled;
+      _persistedAudioOutputPreference =
+          currentSession.settings.audioOutputPreference;
     }
     try {
       widget.identityRepository.sessionListenable.addListener(
@@ -126,10 +132,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
     setState(() {
       _session = session;
-      _hapticsEnabled = session.settings.hapticsEnabled;
-      _audioOutputPreference = session.settings.audioOutputPreference;
     });
   }
+
+  bool get _hasUnsavedSettings =>
+      _accentColorKey != _persistedAccentColorKey ||
+      _hapticsEnabled != _persistedHapticsEnabled ||
+      _audioOutputPreference != _persistedAudioOutputPreference;
 
   void _acceptSession(IdentitySession session) {
     _session = session;
@@ -294,45 +303,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
     nameController.dispose();
   }
 
-  Future<void> _setHapticsEnabled(bool value) async {
-    setState(() => _hapticsEnabled = value);
-    try {
-      final session = await widget.identityRepository.updateSettings(
-        accentColorKey: _accentColorKey,
-        hapticsEnabled: value,
-        audioOutputPreference: _audioOutputPreference,
-      );
-      _persistedAccentColorKey = session.settings.accentColorKey;
-      _hasUnsavedAccentPreview = false;
-      if (!mounted) return;
-      setState(() => _acceptSession(session));
-    } catch (error) {
-      if (!mounted) return;
-      setState(() {
-        _hapticsEnabled = !value;
-        _message = 'Couldn’t update haptics setting.';
-      });
-    }
+  void _setHapticsEnabled(bool value) {
+    setState(() {
+      _hapticsEnabled = value;
+      _message = null;
+    });
   }
 
-  Future<void> _setAudioOutputPreference(String value) async {
-    final previous = _audioOutputPreference;
-    setState(() => _audioOutputPreference = value);
-    try {
-      final session = await widget.identityRepository.updateSettings(
-        accentColorKey: _accentColorKey,
-        hapticsEnabled: _hapticsEnabled,
-        audioOutputPreference: value,
-      );
-      if (!mounted) return;
-      setState(() => _acceptSession(session));
-    } catch (_) {
-      if (!mounted) return;
-      setState(() {
-        _audioOutputPreference = previous;
-        _message = 'Couldn\'t update audio output.';
-      });
-    }
+  void _setAudioOutputPreference(String value) {
+    setState(() {
+      _audioOutputPreference = value;
+      _message = null;
+    });
   }
 
   Future<void> _saveSettings() async {
@@ -348,6 +330,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         audioOutputPreference: _audioOutputPreference,
       );
       _persistedAccentColorKey = session.settings.accentColorKey;
+      _persistedHapticsEnabled = session.settings.hapticsEnabled;
+      _persistedAudioOutputPreference =
+          session.settings.audioOutputPreference;
       _hasUnsavedAccentPreview = false;
       AccentThemeController.setAccentKey(session.settings.accentColorKey);
       if (!mounted) return;
@@ -470,6 +455,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   Widget build(BuildContext context) {
     final accent = accentColorForKey(_accentColorKey);
+    final showSaveButton = _hasUnsavedSettings || _saving;
+    final closedAppReceiveReady =
+        _session.device.notificationPermissionGranted &&
+        _session.device.batteryOptimizationIgnored;
 
     return Scaffold(
       backgroundColor: const Color(0xff101010),
@@ -482,12 +471,60 @@ class _SettingsScreenState extends State<SettingsScreen> {
         title: const Text('Settings'),
         centerTitle: true,
       ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
+      floatingActionButton: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 220),
+        transitionBuilder: (child, animation) => FadeTransition(
+          opacity: animation,
+          child: SlideTransition(
+            position: Tween<Offset>(
+              begin: const Offset(0, 0.25),
+              end: Offset.zero,
+            ).animate(animation),
+            child: child,
+          ),
+        ),
+        child: showSaveButton
+            ? SafeArea(
+                key: const ValueKey('save-settings-floating-button'),
+                minimum: const EdgeInsets.symmetric(horizontal: 20),
+                child: SizedBox(
+                  width: MediaQuery.sizeOf(context).width - 40,
+                  child: FilledButton.icon(
+                    onPressed: _saving ? null : _saveSettings,
+                    style: FilledButton.styleFrom(
+                      minimumSize: const Size.fromHeight(54),
+                      backgroundColor: accent,
+                      foregroundColor: Colors.black,
+                    ),
+                    icon: _saving
+                        ? const SizedBox.square(
+                            dimension: 19,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.black,
+                            ),
+                          )
+                        : const Icon(Icons.check_rounded),
+                    label: const Text('Save settings'),
+                  ),
+                ),
+              )
+            : const SizedBox.shrink(
+                key: ValueKey('save-settings-button-hidden'),
+              ),
+      ),
       body: ColoredBox(
         color: const Color(0xff101010),
         child: SafeArea(
           top: false,
           child: ListView(
-            padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
+            padding: EdgeInsets.fromLTRB(
+              20,
+              8,
+              20,
+              showSaveButton ? 112 : 32,
+            ),
             children: [
               _ProfileHeader(
                 session: _session,
@@ -545,9 +582,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                     value: _hapticsEnabled,
                     activeTrackColor: accent,
-                    onChanged: _saving
-                        ? null
-                        : (value) => unawaited(_setHapticsEnabled(value)),
+                    onChanged: _saving ? null : _setHapticsEnabled,
                   ),
                   const _SurfaceDivider(),
                   const _PreferenceHeading(
@@ -586,10 +621,64 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       selected: {_audioOutputPreference},
                       onSelectionChanged: _saving
                           ? null
-                          : (selection) => unawaited(
-                              _setAudioOutputPreference(selection.first),
-                            ),
+                          : (selection) =>
+                                _setAudioOutputPreference(selection.first),
                     ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 28),
+              const _SectionTitle('Background reliability'),
+              const SizedBox(height: 12),
+              _SettingsSurface(
+                children: [
+                  _ChecklistItem(
+                    ok: _session.device.micPermissionGranted,
+                    label: 'Microphone permission',
+                    detail: _session.device.micPermissionGranted
+                        ? 'Ready'
+                        : 'Required before you can talk.',
+                  ),
+                  _ChecklistItem(
+                    ok: _session.device.notificationPermissionGranted,
+                    label: 'Notification permission',
+                    detail: _session.device.notificationPermissionGranted
+                        ? 'Ready for background activity'
+                        : 'Required for reliable background activity.',
+                  ),
+                  _ChecklistItem(
+                    ok: _session.device.batteryOptimizationIgnored,
+                    label: 'Battery optimization',
+                    detail: _session.device.batteryOptimizationIgnored
+                        ? 'Unrestricted'
+                        : 'Your device may interrupt long sessions.',
+                  ),
+                  _ChecklistItem(
+                    ok: closedAppReceiveReady,
+                    label: 'Closed-app receive',
+                    detail: closedAppReceiveReady
+                        ? 'Ready for nudges when the app is not open.'
+                        : 'Allow notifications and unrestricted background activity.',
+                    showDivider: false,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 28),
+              const _SectionTitle('Legal'),
+              const SizedBox(height: 12),
+              _SettingsSurface(
+                padding: EdgeInsets.zero,
+                children: [
+                  _NavigationRow(
+                    icon: Icons.description_outlined,
+                    label: 'Terms & Conditions',
+                    onTap: () => _openLegalDocument(LegalDocument.terms),
+                  ),
+                  const _SurfaceDivider(indent: 52),
+                  _NavigationRow(
+                    icon: Icons.privacy_tip_outlined,
+                    label: 'Privacy Policy',
+                    onTap: () => _openLegalDocument(LegalDocument.privacy),
                   ),
                 ],
               ),
@@ -630,78 +719,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     label: const Text('Delete account'),
                   ),
                 ],
-              ),
-              const SizedBox(height: 28),
-              const _SectionTitle('Background reliability'),
-              const SizedBox(height: 12),
-              _SettingsSurface(
-                children: [
-                  _ChecklistItem(
-                    ok: _session.device.micPermissionGranted,
-                    label: 'Microphone permission',
-                    detail: _session.device.micPermissionGranted
-                        ? 'Ready'
-                        : 'Required before you can talk.',
-                  ),
-                  _ChecklistItem(
-                    ok: _session.device.notificationPermissionGranted,
-                    label: 'Notification permission',
-                    detail: _session.device.notificationPermissionGranted
-                        ? 'Ready for background activity'
-                        : 'Required for reliable background activity.',
-                  ),
-                  _ChecklistItem(
-                    ok: _session.device.batteryOptimizationIgnored,
-                    label: 'Battery optimization',
-                    detail: _session.device.batteryOptimizationIgnored
-                        ? 'Unrestricted'
-                        : 'Your device may interrupt long sessions.',
-                  ),
-                  const _ChecklistItem(
-                    ok: false,
-                    label: 'Closed-app receive',
-                    detail: 'Keep One One open while testing voice.',
-                    showDivider: false,
-                  ),
-                ],
-              ),
-              const SizedBox(height: 28),
-              const _SectionTitle('Legal'),
-              const SizedBox(height: 12),
-              _SettingsSurface(
-                padding: EdgeInsets.zero,
-                children: [
-                  _NavigationRow(
-                    icon: Icons.description_outlined,
-                    label: 'Terms & Conditions',
-                    onTap: () => _openLegalDocument(LegalDocument.terms),
-                  ),
-                  const _SurfaceDivider(indent: 52),
-                  _NavigationRow(
-                    icon: Icons.privacy_tip_outlined,
-                    label: 'Privacy Policy',
-                    onTap: () => _openLegalDocument(LegalDocument.privacy),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 24),
-              FilledButton.icon(
-                onPressed: _saving ? null : _saveSettings,
-                style: FilledButton.styleFrom(
-                  minimumSize: const Size.fromHeight(54),
-                  backgroundColor: accent,
-                  foregroundColor: Colors.black,
-                ),
-                icon: _saving
-                    ? const SizedBox.square(
-                        dimension: 19,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.black,
-                        ),
-                      )
-                    : const Icon(Icons.check_rounded),
-                label: const Text('Save settings'),
               ),
               if (_message != null) ...[
                 const SizedBox(height: 14),

@@ -29,23 +29,30 @@ class VoiceNudgeMessagingService : FirebaseMessagingService() {
             return
         }
         if (kind != VoiceNudgeContract.kindVoice && kind != VoiceNudgeContract.kindRing) {
-            Log.i(VoiceNudgeDiagnostics.tag, "[FCM-08] Flutter-handled message type=$kind")
+            if (
+                kind == VoiceNudgeContract.kindPush ||
+                kind == VoiceNudgeContract.kindFriendLive
+            ) {
+                showForegroundNotification(message, kind)
+            } else {
+                Log.w(VoiceNudgeDiagnostics.tag, "[FCM-W2] Ignored unknown message type=$kind")
+            }
             return
         }
 
         val eventId = data["eventId"]
         if (eventId == null) {
-            Log.w(VoiceNudgeDiagnostics.tag, "[FCM-W2] Ignored $kind without eventId")
+            Log.w(VoiceNudgeDiagnostics.tag, "[FCM-W3] Ignored $kind without eventId")
             return
         }
         val senderName = data["senderName"]?.take(80).orEmpty().ifBlank { "Someone" }
         val durationMs = data["durationMs"]?.toLongOrNull()?.coerceIn(250L, 10_000L)
         if (durationMs == null) {
-            Log.w(VoiceNudgeDiagnostics.tag, "[FCM-W3] Ignored $kind with invalid duration")
+            Log.w(VoiceNudgeDiagnostics.tag, "[FCM-W4] Ignored $kind with invalid duration")
             return
         }
         if (kind == VoiceNudgeContract.kindVoice && isExpired(data["expiresAt"])) {
-            Log.w(VoiceNudgeDiagnostics.tag, "[FCM-W4] Ignored expired voice nudge")
+            Log.w(VoiceNudgeDiagnostics.tag, "[FCM-W5] Ignored expired voice nudge")
             return
         }
 
@@ -87,7 +94,35 @@ class VoiceNudgeMessagingService : FirebaseMessagingService() {
     override fun onDeletedMessages() {
         Log.w(
             VoiceNudgeDiagnostics.tag,
-            "[FCM-W5] FCM deleted pending messages before delivery",
+            "[FCM-W7] FCM deleted pending messages before delivery",
+        )
+    }
+
+    private fun showForegroundNotification(message: RemoteMessage, kind: String) {
+        val senderName = message.data["senderName"]?.take(80).orEmpty().ifBlank { "Someone" }
+        val fallbackTitle = if (kind == VoiceNudgeContract.kindFriendLive) {
+            "$senderName is live"
+        } else {
+            "$senderName nudged you"
+        }
+        val fallbackBody = if (kind == VoiceNudgeContract.kindFriendLive) {
+            "Tap to open One One"
+        } else {
+            "Come online on One One"
+        }
+        val manager = getSystemService(NOTIFICATION_SERVICE) as android.app.NotificationManager
+        val notificationKey = message.messageId ?: "${kind}_${message.sentTime}"
+        manager.notify(
+            VoiceNudgeNotifications.idFor(notificationKey),
+            VoiceNudgeNotifications.buildGeneral(
+                this,
+                message.notification?.title ?: fallbackTitle,
+                message.notification?.body ?: fallbackBody,
+            ),
+        )
+        Log.i(
+            VoiceNudgeDiagnostics.tag,
+            "[FCM-08] Foreground notification displayed type=$kind",
         )
     }
 

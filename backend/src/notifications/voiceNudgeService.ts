@@ -1,5 +1,8 @@
 import { getRealtimeDatabase } from "../firebase/database.js";
-import { sendAndroidDataPushes } from "../firebase/messaging.js";
+import {
+  isPermanentMessagingTargetError,
+  sendAndroidDataPushes
+} from "../firebase/messaging.js";
 import { getVoiceNudgeBucket } from "../firebase/storage.js";
 import { config } from "../config.js";
 import {
@@ -8,6 +11,7 @@ import {
   requireActiveUser
 } from "../groups/groupService.js";
 import { HttpError } from "../http/httpError.js";
+import { logger } from "../logger.js";
 import {
   createDeliveryToken,
   deliveryTokenMatches,
@@ -49,9 +53,6 @@ type DeliverySecret = {
 const voiceNudgeMediaTtlSeconds = 10 * 60;
 const voiceNudgePushTtlMs = 60 * 1000;
 const ringNudgePushTtlMs = 30 * 1000;
-const senderGroupNudgeWindowSeconds = 10 * 60;
-const senderGroupNudgeLimit = 5;
-const sameRecipientNudgeSeconds = 60;
 
 export async function createVoiceNudge(input: CreateVoiceNudgeInput) {
   validateVoiceNudgeAudio(input.audio, input.durationMs);
@@ -167,6 +168,14 @@ export async function createVoiceNudge(input: CreateVoiceNudgeInput) {
       response?.messageId ?? null;
     deliveryUpdates[`notificationDeliveries/${eventId}/${delivery.deliveryId}/errorCode`] =
       response?.error ? String(response.error) : null;
+    if (isPermanentMessagingTargetError(response?.error)) {
+      deliveryUpdates[
+        `userDevices/${delivery.device.userId}/${delivery.device.deviceId}/fcmToken`
+      ] = null;
+      deliveryUpdates[
+        `userDevices/${delivery.device.userId}/${delivery.device.deviceId}/registrationInvalidatedAt`
+      ] = now;
+    }
   });
   await db.ref().update(deliveryUpdates);
 
@@ -304,24 +313,60 @@ async function enforceNudgeRateLimits(
     return (
       value.senderUserId === senderUserId &&
       ["nudge", "ring_nudge", "voice_nudge"].includes(String(value.eventType)) &&
-      readNumber(value.createdAt) >= now - senderGroupNudgeWindowSeconds
+      readNumber(value.createdAt) >= now - config.NUDGE_RATE_LIMIT_WINDOW_SECONDS
     );
   });
 
-  if (recent.length >= senderGroupNudgeLimit) {
-    throw new HttpError(429, "nudge_rate_limited", "Too many nudges sent in this group.");
+  if (recent.length >= config.NUDGE_RATE_LIMIT_MAX_PER_GROUP) {
+    const oldestCreatedAt = Math.min(
+      ...recent.map((value) => (isRecord(value) ? readNumber(value.createdAt) : now))
+    );
+    const retryAfterSeconds = Math.max(
+      1,
+      oldestCreatedAt + config.NUDGE_RATE_LIMIT_WINDOW_SECONDS - now
+    );
+    logger.warn(
+      {
+        checkpoint: "NUDGE-BE-W1",
+        reason: "group_limit",
+        recentCount: recent.length,
+        configuredLimit: config.NUDGE_RATE_LIMIT_MAX_PER_GROUP,
+        retryAfterSeconds
+      },
+      "nudge request rate limited before FCM send"
+    );
+    throw new HttpError(
+      429,
+      "nudge_rate_limited",
+      `Nudge limit reached. Try again in ${retryAfterSeconds} seconds.`
+    );
   }
 
-  if (targetUserIds.length === 1) {
+  if (config.NUDGE_RECIPIENT_COOLDOWN_SECONDS > 0 && targetUserIds.length === 1) {
     const target = targetUserIds[0];
     const repeated = recent.some((value) => {
-      if (!isRecord(value) || readNumber(value.createdAt) < now - sameRecipientNudgeSeconds) {
+      if (
+        !isRecord(value) ||
+        readNumber(value.createdAt) < now - config.NUDGE_RECIPIENT_COOLDOWN_SECONDS
+      ) {
         return false;
       }
       return Array.isArray(value.targetUserIds) && value.targetUserIds.includes(target);
     });
     if (repeated) {
-      throw new HttpError(429, "nudge_rate_limited", "This friend was nudged too recently.");
+      logger.warn(
+        {
+          checkpoint: "NUDGE-BE-W2",
+          reason: "recipient_cooldown",
+          retryAfterSeconds: config.NUDGE_RECIPIENT_COOLDOWN_SECONDS
+        },
+        "nudge request rate limited before FCM send"
+      );
+      throw new HttpError(
+        429,
+        "nudge_rate_limited",
+        `Please wait ${config.NUDGE_RECIPIENT_COOLDOWN_SECONDS} seconds before nudging this friend again.`
+      );
     }
   }
 }
@@ -426,6 +471,11 @@ async function writePublicDeliveries(
       errorCode: response?.error ? String(response.error) : null,
       attemptedAt: nowSeconds()
     };
+    if (isPermanentMessagingTargetError(response?.error)) {
+      updates[`userDevices/${device.userId}/${device.deviceId}/fcmToken`] = null;
+      updates[`userDevices/${device.userId}/${device.deviceId}/registrationInvalidatedAt`] =
+        nowSeconds();
+    }
   });
   if (Object.keys(updates).length > 0) await getRealtimeDatabase().ref().update(updates);
 }

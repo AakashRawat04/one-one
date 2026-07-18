@@ -14,6 +14,7 @@ import java.security.MessageDigest
 class MainActivity : FlutterFragmentActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        VoiceNudgeNotifications.ensureChannels(this)
         logFirebaseRuntimeConfiguration()
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,

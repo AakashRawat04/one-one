@@ -37,24 +37,32 @@ class NudgeRepository {
   Future<Map<String, dynamic>> sendPush({
     required String groupId,
     required NudgeTarget target,
-  }) {
-    return _apiClient.postJson('/v1/groups/$groupId/nudges', target.json);
+  }) async {
+    final response = await _apiClient.postJson(
+      '/v1/groups/$groupId/nudges',
+      target.json,
+    );
+    return _requireAcceptedDelivery(response);
   }
 
   Future<Map<String, dynamic>> sendRing({
     required String groupId,
     required NudgeTarget target,
     required int durationSeconds,
-  }) {
+  }) async {
     if (durationSeconds != 3 &&
         durationSeconds != 5 &&
         durationSeconds != 10) {
       throw ArgumentError.value(durationSeconds, 'durationSeconds');
     }
-    return _apiClient.postJson('/v1/groups/$groupId/ring-nudges', {
-      ...target.json,
-      'durationSeconds': durationSeconds,
-    });
+    final response = await _apiClient.postJson(
+      '/v1/groups/$groupId/ring-nudges',
+      {
+        ...target.json,
+        'durationSeconds': durationSeconds,
+      },
+    );
+    return _requireAcceptedDelivery(response);
   }
 
   Future<Map<String, dynamic>> sendVoice({
@@ -62,13 +70,53 @@ class NudgeRepository {
     required NudgeTarget target,
     required Uint8List audio,
     required int durationMs,
-  }) {
+  }) async {
     final query = Uri(queryParameters: target.query).query;
-    return _apiClient.postBytes(
+    final response = await _apiClient.postBytes(
       '/v1/groups/$groupId/voice-nudges?$query',
       audio,
       contentType: 'audio/mp4',
       headers: {'x-voice-duration-ms': '$durationMs'},
     );
+    return _requireAcceptedDelivery(response);
   }
+
+  Map<String, dynamic> _requireAcceptedDelivery(
+    Map<String, dynamic> response,
+  ) {
+    final recipientUsers = _readCount(response['recipientUsers']);
+    final targetDevices = _readCount(response['targetDevices']);
+    final sent = _readCount(response['sent']);
+    if (recipientUsers == 0) {
+      throw const NudgeDeliveryException(
+        'No active friends were found for this nudge.',
+      );
+    }
+    if (targetDevices == 0) {
+      throw const NudgeDeliveryException(
+        'The recipient has no registered Android device. Ask them to open One One once.',
+      );
+    }
+    if (sent == 0) {
+      throw const NudgeDeliveryException(
+        'FCM rejected every target device. Check the backend FCM-BE-W1 error code.',
+      );
+    }
+    return response;
+  }
+}
+
+class NudgeDeliveryException implements Exception {
+  const NudgeDeliveryException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
+int _readCount(Object? value) {
+  if (value is int) return value;
+  if (value is num) return value.toInt();
+  return int.tryParse(value?.toString() ?? '') ?? 0;
 }

@@ -158,20 +158,36 @@ selection failed before FCM was called.
 
 ## 8. Delivery and native playback
 
+Expected Android behavior by state:
+
+| Nudge | Foreground | Background | Removed from Recents / locked |
+| --- | --- | --- | --- |
+| Push | Native service displays `[FCM-08]` | Android displays notification payload | Android displays notification payload |
+| 3/5/10-second Ring | Native service rings | High-priority data message starts playback service | High-priority data message starts playback service |
+| Voice | Native service downloads and plays | High-priority data message starts playback service | High-priority data message starts playback service |
+
+“Removed from Recents” is supported. Android force-stop is not: after a user
+force-stops the app in system settings, Android blocks FCM delivery until the
+app is opened manually.
+
 On the receiver, expect:
 
 ```txt
 [FCM-07] Message received
 [FCM-09] Starting native playback
-[FCM-10..15] Native service accepted, downloaded, and played the nudge
+[FCM-10..11] Native service accepted and queued the nudge
+[FCM-11A] Bounded playback wake lock acquired
+[FCM-12..15] Ring/voice playback completed
 [FCM-16] Delivery acknowledgement reached the backend
 [FCM-17] Nudge finished successfully
 ```
 
-- `[FCM-08]` means the message is a Flutter-handled push rather than Ring/Voice.
-- `[FCM-W1..W4]` explains why a native nudge payload was rejected.
+- `[FCM-08]` confirms that a foreground Push/Friend Live notification was displayed.
+- `[FCM-W1..W5]` explains why a native nudge payload was rejected.
 - `[FCM-E3]` means Android refused to start the playback foreground service.
-- `[FCM-W5]` means FCM discarded queued messages before delivery.
+- `[FCM-E8/E9]` means Android failed to acquire or release the bounded playback wake lock.
+- `[FCM-W6]` means the playback service received an invalid start request.
+- `[FCM-W7]` means FCM discarded queued messages before delivery.
 - Force-stopping the app prevents delivery until the user manually opens it.
 - A powered-off phone cannot receive or play a nudge; it can only receive after
   boot and reconnection if the message has not expired.
@@ -188,3 +204,20 @@ Provide these together:
 
 These five items identify the failing boundary without exposing any secret or
 full device identifier.
+
+## 10. Nudge throttling
+
+The backend protects users from spam, but the previous hardcoded limit of five
+nudges per ten minutes blocked a test immediately after Push, 3-second Ring,
+5-second Ring, 10-second Ring, and Voice were tried once. The defaults are now:
+
+```txt
+NUDGE_RATE_LIMIT_WINDOW_SECONDS=600
+NUDGE_RATE_LIMIT_MAX_PER_GROUP=30
+NUDGE_RECIPIENT_COOLDOWN_SECONDS=5
+```
+
+These can be set in the backend environment without an Android release.
+`NUDGE-BE-W1` and `NUDGE-BE-W2` explicitly identify throttling before FCM is
+called. The app now shows the backend retry message instead of reporting a
+generic connection failure.

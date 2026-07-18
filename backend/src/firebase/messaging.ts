@@ -82,6 +82,15 @@ function messageTarget(target: string): { fid: string } | { token: string } {
   return /^[cdef][A-Za-z0-9_-]{21}$/.test(target) ? { fid: target } : { token: target };
 }
 
+export function isPermanentMessagingTargetError(error: unknown) {
+  if (typeof error !== "object" || error === null || !("code" in error)) return false;
+  const code = String(error.code);
+  return (
+    code === "messaging/registration-token-not-registered" ||
+    code === "messaging/invalid-registration-token"
+  );
+}
+
 async function sendMessagesWithDiagnostics(messages: Message[], operation: string) {
   const fidCount = messages.filter((message) => "fid" in message).length;
   const legacyTokenCount = messages.filter((message) => "token" in message).length;

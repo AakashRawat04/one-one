@@ -8,14 +8,19 @@
    delivery token per active Android device, and sends a high-priority,
    data-only FCM message.
 3. `VoiceNudgeMessagingService` starts `VoiceNudgePlaybackService`. The
-   foreground service downloads and plays the recording without starting
-   Flutter, then acknowledges completion.
+   foreground service holds a bounded CPU wake lock, downloads and plays the
+   recording without starting Flutter, then acknowledges completion.
 4. The backend deletes the Storage object after every intended recipient has
    played it. Media expires after ten minutes when accessed; a bucket lifecycle
    rule is the final cleanup safety net.
 
 The same native service produces the three-, five-, and ten-second Ring nudge.
 Ordinary Push nudges continue to use an FCM notification payload.
+
+Foreground Push notifications are displayed explicitly by the native messaging
+service. In the background or after removal from Recents, Android displays the
+notification payload. Ring and Voice use high-priority data messages in all
+three states so the native playback service can run without Flutter.
 
 ## Required backend configuration
 

@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:record/record.dart';
 
+import '../../../core/network/api_client.dart';
 import '../../groups/models/group_member_summary.dart';
 import '../../groups/models/group_summary.dart';
 import '../data/nudge_repository.dart';
@@ -214,9 +215,13 @@ class _NudgeScreenState extends State<NudgeScreen> {
   }
 
   String _friendlyError(Object error) {
+    if (error is NudgeDeliveryException) return error.message;
+    if (error is ApiException && error.code == 'nudge_rate_limited') {
+      return error.message;
+    }
     final text = error.toString();
     if (text.contains('nudge_rate_limited')) {
-      return 'Please wait before nudging again.';
+      return 'Nudge limit reached. Please wait before trying again.';
     }
     if (text.contains('voice_nudge_too_large')) {
       return 'Recording was too large. Try again.';

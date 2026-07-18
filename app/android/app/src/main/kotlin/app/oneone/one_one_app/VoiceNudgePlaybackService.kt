@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
 import android.util.Log
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -31,6 +32,7 @@ class VoiceNudgePlaybackService : Service() {
     private var active: NudgeRequest? = null
     private var player: ExoPlayer? = null
     private var toneGenerator: ToneGenerator? = null
+    private var playbackWakeLock: PowerManager.WakeLock? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -59,6 +61,7 @@ class VoiceNudgePlaybackService : Service() {
     override fun onDestroy() {
         mainHandler.removeCallbacksAndMessages(null)
         releasePlayback()
+        releaseWakeLock()
         networkExecutor.shutdownNow()
         super.onDestroy()
     }
@@ -71,6 +74,7 @@ class VoiceNudgePlaybackService : Service() {
             VoiceNudgeDiagnostics.tag,
             "[FCM-11] Processing queued nudge kind=${request.kind}",
         )
+        holdWakeLock()
         notify(request, if (request.kind == VoiceNudgeContract.kindRing) "Ringing…" else "Downloading voice nudge…")
         if (request.kind == VoiceNudgeContract.kindRing) {
             playRing(request)
@@ -242,6 +246,7 @@ class VoiceNudgePlaybackService : Service() {
             manager.cancel(VoiceNudgeNotifications.idFor(request.eventId))
         }
         if (queue.isEmpty()) {
+            releaseWakeLock()
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 stopForeground(STOP_FOREGROUND_REMOVE)
             } else {
@@ -260,6 +265,34 @@ class VoiceNudgePlaybackService : Service() {
         toneGenerator?.stopTone()
         toneGenerator?.release()
         toneGenerator = null
+    }
+
+    private fun holdWakeLock() {
+        try {
+            val lock = playbackWakeLock ?: run {
+                val powerManager = getSystemService(PowerManager::class.java)
+                powerManager.newWakeLock(
+                    PowerManager.PARTIAL_WAKE_LOCK,
+                    "$packageName:VoiceNudgePlayback",
+                ).apply {
+                    setReferenceCounted(false)
+                    playbackWakeLock = this
+                }
+            }
+            if (lock.isHeld) lock.release()
+            lock.acquire(maxWakeLockDurationMs)
+            Log.i(VoiceNudgeDiagnostics.tag, "[FCM-11A] Playback wake lock acquired")
+        } catch (error: RuntimeException) {
+            VoiceNudgeDiagnostics.logFailure("[FCM-E8] Playback wake lock", error)
+        }
+    }
+
+    private fun releaseWakeLock() {
+        try {
+            playbackWakeLock?.takeIf { it.isHeld }?.release()
+        } catch (error: RuntimeException) {
+            VoiceNudgeDiagnostics.logFailure("[FCM-E9] Playback wake lock release", error)
+        }
     }
 
     private fun notify(request: NudgeRequest, status: String) {
@@ -300,5 +333,6 @@ class VoiceNudgePlaybackService : Service() {
 
     companion object {
         private const val maxAudioBytes = 128 * 1024
+        private const val maxWakeLockDurationMs = 30_000L
     }
 }
