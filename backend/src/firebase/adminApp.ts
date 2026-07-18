@@ -20,7 +20,12 @@ export function getFirebaseAdminApp(): App | null {
   }
 
   const options = {
-    databaseURL: config.FIREBASE_DATABASE_URL
+    databaseURL: config.FIREBASE_DATABASE_URL,
+    storageBucket:
+      config.FIREBASE_STORAGE_BUCKET ??
+      (config.FIREBASE_PROJECT_ID
+        ? `${config.FIREBASE_PROJECT_ID}.firebasestorage.app`
+        : undefined)
   };
 
   if (firebaseServiceAccountConfigured) {

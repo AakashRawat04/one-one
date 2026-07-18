@@ -190,12 +190,18 @@ export async function sendNudgeNotification(input: NudgeInput) {
 }
 
 async function enforceNudgeRateLimits(input: NudgeInput, now: number) {
-  const recentGroupNudges = await listRecentNotificationEvents({
-    groupId: input.groupId,
-    senderUserId: input.senderUserId,
-    eventType: "nudge",
-    since: now - senderGroupNudgeLimitSeconds
-  });
+  const snapshot = await getRealtimeDatabase().ref(`notificationEvents/${input.groupId}`).get();
+  const recentGroupNudges = !snapshot.exists() || !isRecord(snapshot.val())
+    ? []
+    : Object.values(snapshot.val() as Record<string, unknown>)
+        .filter(isNotificationEvent)
+        .filter((event) => {
+          return (
+            event.senderUserId === input.senderUserId &&
+            ["nudge", "ring_nudge", "voice_nudge"].includes(event.eventType) &&
+            event.createdAt >= now - senderGroupNudgeLimitSeconds
+          );
+        });
 
   if (recentGroupNudges.length >= senderGroupNudgeLimit) {
     throw new HttpError(429, "nudge_rate_limited", "Too many nudges sent in this group.");

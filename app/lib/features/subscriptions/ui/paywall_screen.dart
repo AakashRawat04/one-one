@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 
@@ -29,27 +27,8 @@ class PaywallScreen extends StatefulWidget {
 class _PaywallScreenState extends State<PaywallScreen> {
   bool _busy = false;
   bool _restoring = false;
+  bool _redeeming = false;
   String? _message;
-  StreamSubscription<SubscriptionState>? _stateSubscription;
-
-  @override
-  void initState() {
-    super.initState();
-    _stateSubscription =
-        widget.revenueCatService.subscriptionStateStream.listen((state) {
-      if (!mounted) return;
-      if (state.isSubscribed) {
-        // User just purchased — let them through.
-        Navigator.of(context).pop();
-      }
-    });
-  }
-
-  @override
-  void dispose() {
-    _stateSubscription?.cancel();
-    super.dispose();
-  }
 
   Future<void> _subscribe() async {
     setState(() {
@@ -63,7 +42,7 @@ class _PaywallScreenState extends State<PaywallScreen> {
       if (!purchased) {
         setState(() => _message = 'Subscribe to continue using One One.');
       }
-      // If purchased, the stream listener above will auto-dismiss.
+      // If purchased, the subscription stream rebuilds the root gate.
     } catch (e) {
       if (!mounted) return;
       setState(() => _message = 'Something went wrong. Please try again.');
@@ -82,7 +61,7 @@ class _PaywallScreenState extends State<PaywallScreen> {
       final restored = await widget.revenueCatService.restorePurchases();
       if (!mounted) return;
       if (restored) {
-        // Stream listener will auto-dismiss.
+        // The subscription stream rebuilds the root gate.
       } else {
         setState(() => _message = 'No active subscription found to restore.');
       }
@@ -91,6 +70,55 @@ class _PaywallScreenState extends State<PaywallScreen> {
       setState(() => _message = 'Could not restore purchases. Try again.');
     } finally {
       if (mounted) setState(() => _restoring = false);
+    }
+  }
+
+  Future<void> _redeemDeveloperCode() async {
+    final controller = TextEditingController();
+    final code = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: const Color(0xff181818),
+        title: const Text('Developer access'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          autocorrect: false,
+          enableSuggestions: false,
+          textCapitalization: TextCapitalization.characters,
+          decoration: const InputDecoration(
+            labelText: 'Redeem code',
+            border: OutlineInputBorder(),
+          ),
+          onSubmitted: (value) => Navigator.of(dialogContext).pop(value),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(controller.text),
+            child: const Text('Redeem'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (!mounted || code == null || code.trim().isEmpty) return;
+
+    setState(() {
+      _redeeming = true;
+      _message = null;
+    });
+    try {
+      final redeemed = await widget.revenueCatService.redeemDeveloperCode(code);
+      if (!mounted) return;
+      if (!redeemed) {
+        setState(() => _message = 'That developer code is not valid.');
+      }
+    } finally {
+      if (mounted) setState(() => _redeeming = false);
     }
   }
 
@@ -105,11 +133,7 @@ class _PaywallScreenState extends State<PaywallScreen> {
             children: [
               const Spacer(flex: 2),
               // App icon / branding
-              Image.asset(
-                'assets/logo.png',
-                width: 120.w,
-                fit: BoxFit.contain,
-              ),
+              Image.asset('assets/logo.png', width: 120.w, fit: BoxFit.contain),
               SizedBox(height: 28.h),
               Text(
                 'We\'re Experiencing\nHigh Demand! 🚀',
@@ -188,15 +212,30 @@ class _PaywallScreenState extends State<PaywallScreen> {
                         ),
                       ),
               ),
+              if (widget.subscriptionState.developerRedeemEnabled) ...[
+                SizedBox(height: 4.h),
+                TextButton.icon(
+                  onPressed: _redeeming ? null : _redeemDeveloperCode,
+                  icon: _redeeming
+                      ? SizedBox(
+                          width: 16.w,
+                          height: 16.w,
+                          child: const CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white54,
+                          ),
+                        )
+                      : const Icon(Icons.key_rounded, size: 18),
+                  label: const Text('Redeem developer code'),
+                  style: TextButton.styleFrom(foregroundColor: Colors.white54),
+                ),
+              ],
               if (_message != null) ...[
                 SizedBox(height: 16.h),
                 Text(
                   _message!,
                   textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Colors.white54,
-                    fontSize: 13.sp,
-                  ),
+                  style: TextStyle(color: Colors.white54, fontSize: 13.sp),
                 ),
               ],
               const Spacer(flex: 3),

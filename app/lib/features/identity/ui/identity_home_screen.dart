@@ -21,6 +21,7 @@ import '../../online/data/online_repository.dart';
 import '../../online/livekit_status.dart';
 import '../../online/models/member_availability.dart';
 import '../../online/models/online_session.dart';
+import '../../nudges/ui/nudge_screen.dart';
 import '../../talk/data/hand_raise_repository.dart';
 import '../../talk/data/talk_repository.dart';
 import '../../talk/models/in_call_reaction.dart';
@@ -1290,6 +1291,21 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
     );
   }
 
+  void _openNudges() {
+    final group = _selectedGroup;
+    if (group == null) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => NudgeScreen(
+          group: group,
+          currentUserId: _session.userId,
+          members: _displayMembers,
+          accent: accentColorForKey(_session.settings.accentColorKey),
+        ),
+      ),
+    );
+  }
+
   void _openSetupWarnings() {
     final warnings = _setupWarnings();
     showModalBottomSheet<void>(
@@ -1304,16 +1320,13 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
               Text('Setup', style: Theme.of(context).textTheme.titleLarge),
               const SizedBox(height: 12),
               if (warnings.isEmpty)
-                const _SetupLine(ok: true, text: 'Ready for foreground voice')
+                const _SetupLine(
+                  ok: true,
+                  text: 'Ready for foreground and closed-app voice',
+                )
               else
                 for (final warning in warnings)
                   _SetupLine(ok: false, text: warning),
-              const SizedBox(height: 8),
-              const _SetupLine(
-                ok: false,
-                text:
-                    'Closed-app receive is not enabled in this simplified APK.',
-              ),
             ],
           ),
         );
@@ -1330,9 +1343,10 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
       warnings.add('Microphone permission has not been confirmed.');
     }
     if (!_session.device.notificationPermissionGranted) {
-      warnings.add(
-        'Notification permission is missing for future background mode.',
-      );
+      warnings.add('Notification permission is required for closed-app nudges.');
+    }
+    if (_session.device.fcmToken == null) {
+      warnings.add('Push registration is not ready. Reopen the app while online.');
     }
     if (!_session.device.batteryOptimizationIgnored) {
       warnings.add('Battery optimization may interrupt background mode.');
@@ -1459,6 +1473,8 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen> {
               children: [
                 _TopChrome(
                   onSettings: _openSettings,
+                  onNudge: _openNudges,
+                  nudgeEnabled: focusedGroup != null && _friends.isNotEmpty,
                   onSetup: _openSetupWarnings,
                   hasSetupWarnings: warnings.isNotEmpty,
                   busy: _busy,
@@ -1713,6 +1729,8 @@ class _BackdropMemberCollage extends StatelessWidget {
 class _TopChrome extends StatelessWidget {
   const _TopChrome({
     required this.onSettings,
+    required this.onNudge,
+    required this.nudgeEnabled,
     required this.onSetup,
     required this.hasSetupWarnings,
     required this.busy,
@@ -1725,6 +1743,8 @@ class _TopChrome extends StatelessWidget {
   });
 
   final VoidCallback onSettings;
+  final VoidCallback onNudge;
+  final bool nudgeEnabled;
   final VoidCallback onSetup;
   final bool hasSetupWarnings;
   final bool busy;
@@ -1784,6 +1804,12 @@ class _TopChrome extends StatelessWidget {
                           ),
                         ),
                     ],
+                  ),
+                  SizedBox(width: 6.w),
+                  _GlassIconButton(
+                    tooltip: 'Nudge friends',
+                    icon: Icons.notifications_active_outlined,
+                    onPressed: nudgeEnabled ? onNudge : null,
                   ),
                   if (showNetworkStrength) ...[
                     SizedBox(width: 6.w),

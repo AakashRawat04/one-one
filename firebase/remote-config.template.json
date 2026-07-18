@@ -1,0 +1,48 @@
+{
+  "conditions": [],
+  "parameters": {
+    "subscription_pricing_tier": {
+      "defaultValue": { "value": "normal" },
+      "description": "Active RevenueCat pricing tier: normal or extreme.",
+      "valueType": "STRING"
+    },
+    "subscription_grace_period_days": {
+      "defaultValue": { "value": "7" },
+      "description": "Extreme-tier grace period. App accepts only 7 or 14.",
+      "valueType": "NUMBER"
+    },
+    "subscription_extreme_activated_at_ms": {
+      "defaultValue": { "value": "0" },
+      "description": "UTC epoch milliseconds when the current extreme rollout began. Set this when switching the tier to extreme.",
+      "valueType": "NUMBER"
+    },
+    "subscription_offering_normal_india": {
+      "defaultValue": { "value": "normal_india" },
+      "description": "RevenueCat offering ID for normal pricing in the India storefront.",
+      "valueType": "STRING"
+    },
+    "subscription_offering_normal_international": {
+      "defaultValue": { "value": "normal_international" },
+      "description": "RevenueCat offering ID for normal pricing outside India.",
+      "valueType": "STRING"
+    },
+    "subscription_offering_extreme_india": {
+      "defaultValue": { "value": "extreme_india" },
+      "description": "RevenueCat offering ID for extreme pricing in the India storefront.",
+      "valueType": "STRING"
+    },
+    "subscription_offering_extreme_international": {
+      "defaultValue": { "value": "extreme_international" },
+      "description": "RevenueCat offering ID for extreme pricing outside India.",
+      "valueType": "STRING"
+    },
+    "subscription_developer_redeem_enabled": {
+      "defaultValue": { "value": "false" },
+      "description": "Shows the server-validated developer redeem-code action on the blocker.",
+      "valueType": "BOOLEAN"
+    }
+  },
+  "version": {
+    "description": "One One subscription defaults"
+  }
+}

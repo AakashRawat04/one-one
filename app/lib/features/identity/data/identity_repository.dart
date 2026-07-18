@@ -14,6 +14,7 @@ import 'package:permission_handler/permission_handler.dart';
 import '../../../app/accent_theme.dart';
 import '../../../core/firebase/app_database.dart';
 import '../../../core/storage/profile_photo_storage.dart';
+import '../../nudges/data/android_voice_nudge_bridge.dart';
 import '../models/app_user_profile.dart';
 import '../models/identity_session.dart';
 import '../models/user_device_record.dart';
@@ -65,6 +66,9 @@ class IdentityRepository {
       fallback: 'unknown',
     );
     final permissions = await _readPermissionDiagnostics();
+    final fcmToken = Platform.isAndroid
+        ? await _optionalStartupValue(AndroidVoiceNudgeBridge().getFcmToken())
+        : null;
 
     final localSession = IdentitySession(
       user: AppUserProfile(
@@ -91,6 +95,7 @@ class IdentityRepository {
         createdAt: now,
         updatedAt: now,
         lastSeenAt: now,
+        fcmToken: fcmToken,
       ),
       settings: UserSettingsRecord.defaults(now),
     );
@@ -102,6 +107,7 @@ class IdentityRepository {
         localDevice: localDevice,
         appVersion: appVersion,
         permissions: permissions,
+        fcmToken: fcmToken,
         now: now,
       ),
     );
@@ -116,6 +122,7 @@ class IdentityRepository {
         localDevice: localDevice,
         appVersion: appVersion,
         permissions: permissions,
+        fcmToken: fcmToken,
         now: now,
       ),
     );
@@ -367,15 +374,18 @@ class IdentityRepository {
     required LocalDeviceIdentity localDevice,
     required String appVersion,
     required _PermissionDiagnostics permissions,
+    required String? fcmToken,
     required int now,
   }) async {
     final ref = _database.ref('userDevices/$userId/${localDevice.deviceId}');
     final snapshot = await ref.get();
     int createdAt = now;
+    String? resolvedFcmToken = fcmToken;
 
     if (snapshot.exists && snapshot.value is Map<Object?, Object?>) {
       final data = snapshot.value! as Map<Object?, Object?>;
       createdAt = _readInt(data['createdAt'], fallback: now);
+      resolvedFcmToken ??= data['fcmToken']?.toString();
     }
 
     final device = UserDeviceRecord(
@@ -390,6 +400,7 @@ class IdentityRepository {
       createdAt: createdAt,
       updatedAt: now,
       lastSeenAt: now,
+      fcmToken: resolvedFcmToken,
     );
 
     await ref.set(device.toJson());
@@ -401,6 +412,7 @@ class IdentityRepository {
     required LocalDeviceIdentity localDevice,
     required String appVersion,
     required _PermissionDiagnostics permissions,
+    required String? fcmToken,
     required int now,
   }) async {
     try {
@@ -413,6 +425,7 @@ class IdentityRepository {
         localDevice: localDevice,
         appVersion: appVersion,
         permissions: permissions,
+        fcmToken: fcmToken,
         now: now,
       );
 

@@ -10,8 +10,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../features/subscriptions/data/remote_config_service.dart';
 import '../features/subscriptions/data/revenuecat_service.dart';
+import '../features/subscriptions/data/developer_access_service.dart';
+import '../features/subscriptions/data/subscription_grace_period_store.dart';
+import '../features/subscriptions/data/subscription_auth_bootstrap.dart';
 import '../features/subscriptions/models/subscription_state.dart';
-import '../features/subscriptions/models/subscription_tier.dart';
 import '../features/subscriptions/ui/paywall_screen.dart';
 import 'accent_theme.dart';
 import 'firebase_setup_blocked_screen.dart';
@@ -120,8 +122,15 @@ class _FirebaseGateState extends State<_FirebaseGate> {
   RemoteConfigService? _remoteConfigService;
   RevenueCatService? _revenueCatService;
   Future<SubscriptionState?>? _subscriptionCheckFuture;
+  Timer? _graceDeadlineTimer;
 
-  static const String _firstLaunchKey = 'one_one_first_launch_ms';
+  @override
+  void dispose() {
+    _graceDeadlineTimer?.cancel();
+    _revenueCatService?.dispose();
+    unawaited(_remoteConfigService?.dispose());
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -201,6 +210,7 @@ class _FirebaseGateState extends State<_FirebaseGate> {
   }
 
   Widget _buildSubscriptionDecision(SubscriptionState state) {
+    _scheduleGraceDeadline(state);
     if (state.shouldBlock) {
       return PaywallScreen(
         revenueCatService: _revenueCatService!,
@@ -210,6 +220,19 @@ class _FirebaseGateState extends State<_FirebaseGate> {
     return const StartupGateScreen();
   }
 
+  void _scheduleGraceDeadline(SubscriptionState state) {
+    _graceDeadlineTimer?.cancel();
+    _graceDeadlineTimer = null;
+    if (state.isSubscribed || state.hasDeveloperBypass) return;
+    final deadline = state.graceEndsAt;
+    if (deadline == null) return;
+    final remainingMs = deadline - DateTime.now().millisecondsSinceEpoch;
+    if (remainingMs <= 0) return;
+    _graceDeadlineTimer = Timer(Duration(milliseconds: remainingMs), () {
+      if (mounted) setState(() {});
+    });
+  }
+
   Future<SubscriptionState?> _initSubscriptions() async {
     try {
       // 1. Set up Remote Config for tier/grace-period flags.
@@ -217,44 +240,39 @@ class _FirebaseGateState extends State<_FirebaseGate> {
       await remoteConfig.initialize();
       _remoteConfigService = remoteConfig;
 
-      // 2. Record first launch timestamp for grace-period calculation.
+      // 2. Establish one stable Firebase/RevenueCat identity. Existing users
+      // keep their restored UID; new users begin anonymously and may later
+      // link that same account to Google during onboarding.
+      final auth = FirebaseAuth.instance;
       final prefs = await SharedPreferences.getInstance();
-      final now = DateTime.now().millisecondsSinceEpoch;
-      if (!prefs.containsKey(_firstLaunchKey)) {
-        await prefs.setInt(_firstLaunchKey, now);
+      var user = auth.currentUser;
+      if (user == null) {
+        user = (await auth.signInAnonymously()).user;
+        if (user != null) {
+          await SubscriptionAuthBootstrap.markPending(prefs, user.uid);
+        }
+      }
+      if (user == null) {
+        throw StateError('Firebase sign-in did not return a user.');
       }
 
-      // 3. Set up RevenueCat.
+      // 3. Resolve server-verified developer access and grace-period storage.
+      final developerAccess = DeveloperAccessService(auth: auth);
+      final hasDeveloperBypass = await developerAccess.hasDeveloperBypass();
+      final gracePeriodStore = SubscriptionGracePeriodStore(preferences: prefs);
+
+      // 4. Set up RevenueCat with the Firebase UID as its App User ID.
       final revenueCat = RevenueCatService(
         remoteConfigService: remoteConfig,
+        appUserId: user.uid,
+        developerAccessService: developerAccess,
+        gracePeriodStore: gracePeriodStore,
+        hasDeveloperBypass: hasDeveloperBypass,
       );
       await revenueCat.initialize();
       _revenueCatService = revenueCat;
 
-      final state = revenueCat.latestState;
-      if (state == null) return null;
-
-      // 4. Grace-period enforcement for the extreme tier.
-      //    If the user is not subscribed and the extreme tier is active,
-      //    check whether the grace period has elapsed since first launch.
-      if (!state.isSubscribed && state.activeTier == SubscriptionTier.extreme) {
-        final firstLaunchMs = prefs.getInt(_firstLaunchKey) ?? now;
-        final gracePeriodMs = state.gracePeriodDays *
-            const Duration(days: 1).inMilliseconds;
-        final elapsedMs = now - firstLaunchMs;
-
-        if (elapsedMs < gracePeriodMs) {
-          // Still within grace period — let the user through for now.
-          // Return a state that does NOT block.
-          return SubscriptionState(
-            isSubscribed: false,
-            activeTier: state.activeTier,
-            gracePeriodDays: state.gracePeriodDays,
-          );
-        }
-      }
-
-      return state;
+      return revenueCat.latestState;
     } catch (e) {
       debugPrint('Subscription init error: $e');
       // Never block the user because of a subscription-check failure.

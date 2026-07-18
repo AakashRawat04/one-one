@@ -1,4 +1,4 @@
-import type { MulticastMessage } from "firebase-admin/messaging";
+import type { Message, MulticastMessage } from "firebase-admin/messaging";
 import { getMessaging } from "firebase-admin/messaging";
 import { requireFirebaseAdminApp } from "./adminApp.js";
 
@@ -34,4 +34,30 @@ export async function sendPushToTokens(payload: PushPayload) {
   };
 
   return getMessaging(requireFirebaseAdminApp()).sendEachForMulticast(message);
+}
+
+export type AndroidDataPush = {
+  token: string;
+  data: Record<string, string>;
+};
+
+export async function sendAndroidDataPushes(pushes: AndroidDataPush[], ttlMs: number) {
+  if (pushes.length === 0) {
+    return {
+      successCount: 0,
+      failureCount: 0,
+      responses: []
+    };
+  }
+
+  const messages: Message[] = pushes.map((push) => ({
+    token: push.token,
+    data: push.data,
+    android: {
+      priority: "high",
+      ttl: ttlMs
+    }
+  }));
+
+  return getMessaging(requireFirebaseAdminApp()).sendEach(messages);
 }

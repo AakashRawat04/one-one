@@ -8,6 +8,7 @@ import { createGroupRoutes } from "./routes/groupRoutes.js";
 import { createHealthRoutes } from "./routes/healthRoutes.js";
 import { createLiveKitRoutes } from "./routes/liveKitRoutes.js";
 import { createNotificationRoutes } from "./routes/notificationRoutes.js";
+import { createSubscriptionRoutes } from "./routes/subscriptionRoutes.js";
 
 export function createApp() {
   const app = express();
@@ -28,6 +29,7 @@ export function createApp() {
   app.use(createGroupRoutes());
   app.use(createLiveKitRoutes());
   app.use(createNotificationRoutes());
+  app.use(createSubscriptionRoutes());
 
   app.use((_request, response) => {
     response.status(404).json({
@@ -54,6 +56,19 @@ export function createApp() {
         response.status(400).json({
           error: "validation_failed",
           issues: error.flatten().fieldErrors
+        });
+        return;
+      }
+
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        "status" in error &&
+        error.status === 413
+      ) {
+        response.status(413).json({
+          error: "request_too_large",
+          message: "Request body exceeds the allowed size."
         });
         return;
       }

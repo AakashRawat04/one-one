@@ -6,6 +6,7 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../features/groups/group_entry_resolver.dart';
+import '../features/subscriptions/data/subscription_auth_bootstrap.dart';
 import '../features/identity/data/identity_repository.dart';
 import '../features/identity/models/identity_session.dart';
 import '../features/identity/ui/no_groups_screen.dart';
@@ -51,9 +52,12 @@ class _StartupGateScreenState extends State<StartupGateScreen> {
 
   Future<void> _prepareIntro() async {
     final authUser = await FirebaseAuth.instance.authStateChanges().first;
+    final prefs = await SharedPreferences.getInstance();
     if (!mounted) return;
 
-    _isExistingUser = authUser != null;
+    _isExistingUser =
+        authUser != null &&
+        !SubscriptionAuthBootstrap.isPending(prefs, authUser.uid);
 
     _introTimer = Timer(_introDelay, () async {
       if (!mounted) return;
@@ -82,6 +86,8 @@ class _StartupGateScreenState extends State<StartupGateScreen> {
     try {
       if (useGoogle) await _identityRepository.signInWithGoogle();
       final session = await _identityRepository.ensureIdentity();
+      final prefs = await SharedPreferences.getInstance();
+      await SubscriptionAuthBootstrap.clear(prefs, session.userId);
       if (!mounted) return;
 
       final setupCompleted = await _hasCompletedSetup(session.userId);

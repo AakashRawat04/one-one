@@ -12,6 +12,12 @@ const envSchema = z.object({
   FIREBASE_CLIENT_EMAIL: z.string().email().optional(),
   FIREBASE_PRIVATE_KEY: z.string().min(1).optional(),
   FIREBASE_DATABASE_URL: z.string().url().optional(),
+  FIREBASE_STORAGE_BUCKET: z.string().min(1).optional(),
+  PUBLIC_API_BASE_URL: z
+    .string()
+    .url()
+    .default("https://one-one-xw00.onrender.com"),
+  SUBSCRIPTION_REDEEM_CODE_HASHES: z.string().optional(),
   CORS_ORIGINS: z.string().optional()
 });
 

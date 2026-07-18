@@ -80,6 +80,10 @@
         ".write": false
       }
     },
+    "voiceNudges": {
+      ".read": false,
+      ".write": false
+    },
     "talkLocks": {
       "$groupId": {
         ".read": "auth != null",
