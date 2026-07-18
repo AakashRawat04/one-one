@@ -97,6 +97,13 @@ class MainActivity : FlutterFragmentActivity() {
                 "firebase_messaging_installation_id_enabled",
                 false,
             ) ?: false
+            val buildType = if (
+                applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0
+            ) {
+                "debug"
+            } else {
+                "release"
+            }
             val googlePlayServicesVersion = try {
                 packageManager.getPackageInfo("com.google.android.gms", 0).versionName
             } catch (_: PackageManager.NameNotFoundException) {
@@ -107,7 +114,7 @@ class MainActivity : FlutterFragmentActivity() {
                 VoiceNudgeDiagnostics.tag,
                 "[FCM-01] runtime configuration " +
                     "package=$packageName " +
-                    "build=${if (BuildConfig.DEBUG) "debug" else "release"} " +
+                    "build=$buildType " +
                     "signingSha1=${signingCertificateSha1() ?: "unavailable"} " +
                     "firebaseAppId=${options.applicationId} " +
                     "projectId=${options.projectId} " +
