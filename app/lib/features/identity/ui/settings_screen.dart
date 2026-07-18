@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -77,7 +78,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late String _persistedAccentColorKey = _session.settings.accentColorKey;
   bool _saving = false;
   bool _photoSaving = false;
-  bool _googleSigningIn = false;
+  bool _accountActionInProgress = false;
   bool _hasUnsavedAccentPreview = false;
   String? _message;
 
@@ -362,26 +363,100 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  Future<void> _connectGoogleAccount() async {
-    if (_googleSigningIn) return;
+  String get _signedInEmail {
+    final user = FirebaseAuth.instance.currentUser;
+    final directEmail = user?.email?.trim();
+    if (directEmail != null && directEmail.isNotEmpty) return directEmail;
+    for (final provider in user?.providerData ?? const <UserInfo>[]) {
+      final email = provider.email?.trim();
+      if (email != null && email.isNotEmpty) return email;
+    }
+    return 'Google account';
+  }
+
+  Future<void> _logOut() async {
+    final confirmed = await _confirmAccountAction(
+      title: 'Log out?',
+      message: 'You will need to sign in with Google to use One One again.',
+      actionLabel: 'Log out',
+    );
+    if (!confirmed || !mounted) return;
+
     setState(() {
-      _googleSigningIn = true;
+      _accountActionInProgress = true;
       _message = null;
     });
     try {
-      await widget.identityRepository.signInWithGoogle();
-      final session = await widget.identityRepository.ensureIdentity();
+      await widget.identityRepository.signOut();
       if (!mounted) return;
-      setState(() {
-        _acceptSession(session);
-        _message = 'Google account connected';
-      });
+      Navigator.of(context).popUntil((route) => route.isFirst);
     } catch (error) {
       if (!mounted) return;
       setState(() => _message = error.toString());
     } finally {
-      if (mounted) setState(() => _googleSigningIn = false);
+      if (mounted) setState(() => _accountActionInProgress = false);
     }
+  }
+
+  Future<void> _deleteAccount() async {
+    final confirmed = await _confirmAccountAction(
+      title: 'Delete account permanently?',
+      message:
+          'Your One One profile, device information, and preferences will be deleted. This cannot be undone.',
+      actionLabel: 'Delete account',
+      destructive: true,
+    );
+    if (!confirmed || !mounted) return;
+
+    setState(() {
+      _accountActionInProgress = true;
+      _message = null;
+    });
+    try {
+      await widget.identityRepository.deleteAccount();
+      if (!mounted) return;
+      Navigator.of(context).popUntil((route) => route.isFirst);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _message =
+            'Account deletion couldn\'t be completed. Sign in with Google again and retry.';
+      });
+    } finally {
+      if (mounted) setState(() => _accountActionInProgress = false);
+    }
+  }
+
+  Future<bool> _confirmAccountAction({
+    required String title,
+    required String message,
+    required String actionLabel,
+    bool destructive = false,
+  }) async {
+    return await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: Text(title),
+            content: Text(message),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(dialogContext, true),
+                style: destructive
+                    ? FilledButton.styleFrom(
+                        backgroundColor: const Color(0xffb3261e),
+                        foregroundColor: Colors.white,
+                      )
+                    : null,
+                child: Text(actionLabel),
+              ),
+            ],
+          ),
+        ) ??
+        false;
   }
 
   void _openLegalDocument(LegalDocument document) {
@@ -519,42 +594,44 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ],
               ),
               const SizedBox(height: 28),
-              if (_session.user.authProvider == 'anonymous') ...[
-                const _SectionTitle('Account'),
-                const SizedBox(height: 12),
-                _SettingsSurface(
-                  children: [
-                    const _PreferenceHeading(
-                      icon: Icons.account_circle_outlined,
-                      title: 'Google account',
-                      subtitle:
-                          'Keep your One One identity with Google sign-in.',
+              const _SectionTitle('Account'),
+              const SizedBox(height: 12),
+              _SettingsSurface(
+                children: [
+                  _PreferenceHeading(
+                    icon: Icons.account_circle_outlined,
+                    title: _signedInEmail,
+                    subtitle: 'Signed in with Google',
+                  ),
+                  const SizedBox(height: 16),
+                  OutlinedButton.icon(
+                    onPressed: _accountActionInProgress ? null : _logOut,
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size.fromHeight(50),
+                      foregroundColor: Colors.white,
+                      side: const BorderSide(color: Colors.white24),
                     ),
-                    const SizedBox(height: 16),
-                    OutlinedButton.icon(
-                      onPressed: _googleSigningIn
-                          ? null
-                          : _connectGoogleAccount,
-                      style: OutlinedButton.styleFrom(
-                        minimumSize: const Size.fromHeight(50),
-                        foregroundColor: Colors.white,
-                        side: const BorderSide(color: Colors.white24),
-                      ),
-                      icon: _googleSigningIn
-                          ? const SizedBox.square(
-                              dimension: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Text(
-                              'G',
-                              style: TextStyle(fontWeight: FontWeight.w800),
-                            ),
-                      label: const Text('Sign in with Google'),
+                    icon: _accountActionInProgress
+                        ? const SizedBox.square(
+                            dimension: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.logout_rounded),
+                    label: const Text('Log out'),
+                  ),
+                  const SizedBox(height: 8),
+                  TextButton.icon(
+                    onPressed: _accountActionInProgress ? null : _deleteAccount,
+                    style: TextButton.styleFrom(
+                      minimumSize: const Size.fromHeight(46),
+                      foregroundColor: const Color(0xffff8a80),
                     ),
-                  ],
-                ),
-                const SizedBox(height: 28),
-              ],
+                    icon: const Icon(Icons.delete_outline_rounded),
+                    label: const Text('Delete account'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 28),
               const _SectionTitle('Background reliability'),
               const SizedBox(height: 12),
               _SettingsSurface(

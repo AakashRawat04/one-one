@@ -6,10 +6,7 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 
 class BatteryOptimizationScreen extends StatefulWidget {
-  const BatteryOptimizationScreen({
-    super.key,
-    required this.onComplete,
-  });
+  const BatteryOptimizationScreen({super.key, required this.onComplete});
 
   final Future<void> Function() onComplete;
 
@@ -127,9 +124,7 @@ class _BatteryOptimizationScreenState extends State<BatteryOptimizationScreen>
               ),
               SizedBox(height: 32.h),
               Expanded(
-                child: Center(
-                  child: _ConnectingCard(isBusy: _busy),
-                ),
+                child: Center(child: _ConnectingCard(isBusy: _busy)),
               ),
               SizedBox(height: 24.h),
               SizedBox(
@@ -158,7 +153,7 @@ class _BatteryOptimizationScreenState extends State<BatteryOptimizationScreen>
                             ),
                           )
                         : Text(
-                            'change now',
+                            'allow now',
                             key: const ValueKey('label'),
                             style: TextStyle(
                               fontSize: 16.sp,
@@ -199,11 +194,7 @@ class _ConnectingCard extends StatelessWidget {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Image.asset(
-            'assets/logo.png',
-            width: 64.w,
-            height: 64.w,
-          ),
+          Image.asset('assets/logo.png', width: 64.w, height: 64.w),
           SizedBox(height: 56.h),
           Text(
             'connecting_',

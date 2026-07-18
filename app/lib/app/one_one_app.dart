@@ -12,11 +12,11 @@ import '../features/subscriptions/data/remote_config_service.dart';
 import '../features/subscriptions/data/revenuecat_service.dart';
 import '../features/subscriptions/data/developer_access_service.dart';
 import '../features/subscriptions/data/subscription_grace_period_store.dart';
-import '../features/subscriptions/data/subscription_auth_bootstrap.dart';
 import '../features/subscriptions/models/subscription_state.dart';
 import '../features/subscriptions/ui/paywall_screen.dart';
 import 'accent_theme.dart';
 import 'firebase_setup_blocked_screen.dart';
+import 'google_auth_screen.dart';
 import 'startup_gate_screen.dart';
 
 class OneOneApp extends StatelessWidget {
@@ -118,20 +118,6 @@ class _FirebaseGate extends StatefulWidget {
 class _FirebaseGateState extends State<_FirebaseGate> {
   late final Future<FirebaseApp> _firebaseInit = Firebase.initializeApp();
 
-  // Lazy-initialised after Firebase is ready.
-  RemoteConfigService? _remoteConfigService;
-  RevenueCatService? _revenueCatService;
-  Future<SubscriptionState?>? _subscriptionCheckFuture;
-  Timer? _graceDeadlineTimer;
-
-  @override
-  void dispose() {
-    _graceDeadlineTimer?.cancel();
-    _revenueCatService?.dispose();
-    unawaited(_remoteConfigService?.dispose());
-    super.dispose();
-  }
-
   @override
   Widget build(BuildContext context) {
     return FutureBuilder<FirebaseApp>(
@@ -158,11 +144,57 @@ class _FirebaseGateState extends State<_FirebaseGate> {
           );
         }
 
-        // Firebase is ready — now initialise subscriptions.
-        return _subscriptionGate();
+        return StreamBuilder<User?>(
+          stream: FirebaseAuth.instance.userChanges(),
+          initialData: FirebaseAuth.instance.currentUser,
+          builder: (context, authSnapshot) {
+            final user = authSnapshot.data;
+            if (user == null ||
+                user.isAnonymous ||
+                !user.providerData.any(
+                  (provider) => provider.providerId == 'google.com',
+                )) {
+              return const GoogleAuthScreen();
+            }
+
+            return _AuthenticatedSubscriptionGate(
+              key: ValueKey(user.uid),
+              user: user,
+            );
+          },
+        );
       },
     );
   }
+}
+
+class _AuthenticatedSubscriptionGate extends StatefulWidget {
+  const _AuthenticatedSubscriptionGate({super.key, required this.user});
+
+  final User user;
+
+  @override
+  State<_AuthenticatedSubscriptionGate> createState() =>
+      _AuthenticatedSubscriptionGateState();
+}
+
+class _AuthenticatedSubscriptionGateState
+    extends State<_AuthenticatedSubscriptionGate> {
+  RemoteConfigService? _remoteConfigService;
+  RevenueCatService? _revenueCatService;
+  Future<SubscriptionState?>? _subscriptionCheckFuture;
+  Timer? _graceDeadlineTimer;
+
+  @override
+  void dispose() {
+    _graceDeadlineTimer?.cancel();
+    _revenueCatService?.dispose();
+    unawaited(_remoteConfigService?.dispose());
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => _subscriptionGate();
 
   Widget _subscriptionGate() {
     final remoteConfig = _remoteConfigService;
@@ -240,20 +272,12 @@ class _FirebaseGateState extends State<_FirebaseGate> {
       await remoteConfig.initialize();
       _remoteConfigService = remoteConfig;
 
-      // 2. Establish one stable Firebase/RevenueCat identity. Existing users
-      // keep their restored UID; new users begin anonymously and may later
-      // link that same account to Google during onboarding.
+      // Google authentication happens before subscriptions and onboarding, so
+      // RevenueCat always receives the stable authenticated Firebase UID.
       final auth = FirebaseAuth.instance;
       final prefs = await SharedPreferences.getInstance();
-      var user = auth.currentUser;
-      if (user == null) {
-        user = (await auth.signInAnonymously()).user;
-        if (user != null) {
-          await SubscriptionAuthBootstrap.markPending(prefs, user.uid);
-        }
-      }
-      if (user == null) {
-        throw StateError('Firebase sign-in did not return a user.');
+      if (auth.currentUser?.uid != widget.user.uid || widget.user.isAnonymous) {
+        throw StateError('Google authentication is required.');
       }
 
       // 3. Resolve server-verified developer access and grace-period storage.
@@ -264,7 +288,7 @@ class _FirebaseGateState extends State<_FirebaseGate> {
       // 4. Set up RevenueCat with the Firebase UID as its App User ID.
       final revenueCat = RevenueCatService(
         remoteConfigService: remoteConfig,
-        appUserId: user.uid,
+        appUserId: widget.user.uid,
         developerAccessService: developerAccess,
         gracePeriodStore: gracePeriodStore,
         hasDeveloperBypass: hasDeveloperBypass,

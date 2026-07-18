@@ -76,9 +76,16 @@ class RevenueCatService {
     // Configure the SDK with the correct API key.
     // On Android this activates the Google Play Billing library;
     // on iOS it sets up StoreKit.
-    await Purchases.configure(
-      PurchasesConfiguration(_apiKey)..appUserID = appUserId,
-    );
+    if (await Purchases.isConfigured) {
+      // Firebase logout/login can change the app user without restarting the
+      // process. RevenueCat must follow that authenticated identity instead
+      // of retaining the previous account's entitlements.
+      await Purchases.logIn(appUserId);
+    } else {
+      await Purchases.configure(
+        PurchasesConfiguration(_apiKey)..appUserID = appUserId,
+      );
+    }
 
     // Listen for customer-info changes so the app stays in sync
     // (e.g. after a purchase or cancellation on another device).

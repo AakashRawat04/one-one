@@ -53,8 +53,8 @@ class IdentityRepository {
 
   Future<IdentitySession> ensureIdentity() async {
     final firebaseUser = await _requiredStartupStep(
-      _ensureAnonymousUser(),
-      'Firebase anonymous sign-in',
+      _requireGoogleUser(),
+      'Google authentication',
     );
     final now = _nowSeconds();
     final localDevice = await _requiredStartupStep(
@@ -268,11 +268,10 @@ class IdentityRepository {
       } on FirebaseAuthException catch (error) {
         if (error.code == 'credential-already-in-use' ||
             error.code == 'account-exists-with-different-credential') {
-          throw StateError(
-            'That Google account is already connected to another One One account.',
-          );
+          result = await _auth.signInWithCredential(credential);
+        } else {
+          rethrow;
         }
-        rethrow;
       }
     } else {
       result = await _auth.signInWithCredential(credential);
@@ -289,6 +288,38 @@ class IdentityRepository {
     return user;
   }
 
+  Future<void> signOut() async {
+    try {
+      await GoogleSignIn.instance.signOut();
+    } finally {
+      await _auth.signOut();
+      _clearSession();
+    }
+  }
+
+  Future<void> deleteAccount() async {
+    final user = _auth.currentUser;
+    if (user == null || user.isAnonymous) {
+      throw StateError('No Google account is signed in.');
+    }
+
+    final credential = await _googleCredential();
+    await user.reauthenticateWithCredential(credential);
+
+    await _database.ref().update({
+      'users/${user.uid}': null,
+      'userDevices/${user.uid}': null,
+      'userSettings/${user.uid}': null,
+    });
+    await user.delete();
+    try {
+      await GoogleSignIn.instance.disconnect();
+    } catch (_) {
+      await GoogleSignIn.instance.signOut();
+    }
+    _clearSession();
+  }
+
   void dispose() {
     _disposed = true;
     _cachedSession = null;
@@ -301,20 +332,32 @@ class IdentityRepository {
 
   bool get isDisposed => _disposed;
 
-  Future<User> _ensureAnonymousUser() async {
+  Future<User> _requireGoogleUser() async {
     final currentUser = _auth.currentUser;
-    if (currentUser != null) {
+    if (currentUser != null &&
+        !currentUser.isAnonymous &&
+        currentUser.providerData.any(
+          (provider) => provider.providerId == 'google.com',
+        )) {
       return currentUser;
     }
+    throw StateError('Google sign-in is required before setup.');
+  }
 
-    final credential = await _auth.signInAnonymously();
-    final user = credential.user;
-
-    if (user == null) {
-      throw StateError('Firebase anonymous sign-in returned no user.');
+  Future<AuthCredential> _googleCredential() async {
+    _googleSignInInitialization ??= GoogleSignIn.instance.initialize();
+    await _googleSignInInitialization;
+    final account = await GoogleSignIn.instance.authenticate();
+    final idToken = account.authentication.idToken;
+    if (idToken == null || idToken.isEmpty) {
+      throw StateError('Google sign-in did not return an ID token.');
     }
+    return GoogleAuthProvider.credential(idToken: idToken);
+  }
 
-    return user;
+  void _clearSession() {
+    _cachedSession = null;
+    if (!_disposed) _sessionNotifier.value = null;
   }
 
   Future<AppUserProfile> _upsertUserProfile(User firebaseUser, int now) async {
