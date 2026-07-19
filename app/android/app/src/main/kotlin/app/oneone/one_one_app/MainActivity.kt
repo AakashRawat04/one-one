@@ -2,6 +2,7 @@ package app.oneone.one_one_app
 
 import android.content.pm.PackageManager
 import android.os.Build
+import android.content.Intent
 import android.util.Log
 import com.google.firebase.FirebaseApp
 import com.google.firebase.installations.FirebaseInstallations
@@ -12,14 +13,19 @@ import io.flutter.plugin.common.MethodChannel
 import java.security.MessageDigest
 
 class MainActivity : FlutterFragmentActivity() {
+    private lateinit var voiceNudgeChannel: MethodChannel
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         VoiceNudgeNotifications.ensureChannels(this)
         logFirebaseRuntimeConfiguration()
-        MethodChannel(
+        voiceNudgeChannel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             VoiceNudgeContract.flutterChannel,
-        ).setMethodCallHandler { call, result ->
+        )
+        NudgeActionDispatcher.attach(voiceNudgeChannel)
+        captureNudgeAction(intent)
+        voiceNudgeChannel.setMethodCallHandler { call, result ->
             when (call.method) {
                 // Keep the channel name for compatibility with existing Dart and
                 // database records. New SDKs return the registered Firebase
@@ -80,9 +86,48 @@ class MainActivity : FlutterFragmentActivity() {
                         }
                 }
 
+                "takePendingNudgeAction" -> {
+                    result.success(NudgeActionStore.take(this)?.toMap())
+                }
+
                 else -> result.notImplemented()
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        captureNudgeAction(intent)
+    }
+
+    override fun onDestroy() {
+        if (::voiceNudgeChannel.isInitialized) {
+            NudgeActionDispatcher.detach(voiceNudgeChannel)
+        }
+        super.onDestroy()
+    }
+
+    private fun captureNudgeAction(intent: Intent?) {
+        val action = when (intent?.action) {
+            VoiceNudgeContract.actionAccept -> "accept"
+            VoiceNudgeContract.actionConnect -> "connect"
+            else -> return
+        }
+        val eventId = intent.getStringExtra(VoiceNudgeContract.extraEventId) ?: return
+        val groupId = intent.getStringExtra(VoiceNudgeContract.extraGroupId) ?: return
+        val notificationId = intent.getIntExtra(
+            VoiceNudgeContract.extraNotificationId,
+            VoiceNudgeNotifications.idFor(eventId),
+        )
+        (getSystemService(NOTIFICATION_SERVICE) as android.app.NotificationManager)
+            .cancel(notificationId)
+        NudgeActionStore.save(this, PendingNudgeAction(action, eventId, groupId))
+        NudgeActionDispatcher.signal()
+        Log.i(
+            VoiceNudgeDiagnostics.tag,
+            "[NUDGE-ACTION-02] queued action=$action eventSuffix=${eventId.takeLast(6)}",
+        )
     }
 
     @Suppress("DEPRECATION")

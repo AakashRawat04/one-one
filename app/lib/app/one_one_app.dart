@@ -18,6 +18,7 @@ import 'accent_theme.dart';
 import 'firebase_setup_blocked_screen.dart';
 import 'google_auth_screen.dart';
 import 'startup_gate_screen.dart';
+import 'app_config.dart';
 
 class OneOneApp extends StatelessWidget {
   const OneOneApp({super.key});
@@ -221,7 +222,11 @@ class _AuthenticatedSubscriptionGateState
             );
           }
           if (snapshot.hasError || snapshot.data == null) {
-            // Fall through to the app — don't block on errors.
+            if (!AppConfig.isInternalBuild) {
+              return _SubscriptionInitializationBlockedScreen(
+                onRetry: _retrySubscriptionInitialization,
+              );
+            }
             return const StartupGateScreen();
           }
           return _buildSubscriptionDecision(snapshot.data!);
@@ -235,7 +240,14 @@ class _AuthenticatedSubscriptionGateState
       initialData: revenueCat.latestState,
       builder: (context, snapshot) {
         final state = snapshot.data;
-        if (state == null) return const StartupGateScreen();
+        if (state == null) {
+          if (!AppConfig.isInternalBuild) {
+            return _SubscriptionInitializationBlockedScreen(
+              onRetry: _retrySubscriptionInitialization,
+            );
+          }
+          return const StartupGateScreen();
+        }
         return _buildSubscriptionDecision(state);
       },
     );
@@ -282,7 +294,8 @@ class _AuthenticatedSubscriptionGateState
 
       // 3. Resolve server-verified developer access and grace-period storage.
       final developerAccess = DeveloperAccessService(auth: auth);
-      final hasDeveloperBypass = await developerAccess.hasDeveloperBypass();
+      final hasDeveloperBypass = AppConfig.isInternalBuild &&
+          await developerAccess.hasDeveloperBypass();
       final gracePeriodStore = SubscriptionGracePeriodStore(preferences: prefs);
 
       // 4. Set up RevenueCat with the Firebase UID as its App User ID.
@@ -299,8 +312,65 @@ class _AuthenticatedSubscriptionGateState
       return revenueCat.latestState;
     } catch (e) {
       debugPrint('Subscription init error: $e');
-      // Never block the user because of a subscription-check failure.
       return null;
     }
+  }
+
+  void _retrySubscriptionInitialization() {
+    _graceDeadlineTimer?.cancel();
+    _revenueCatService?.dispose();
+    unawaited(_remoteConfigService?.dispose());
+    setState(() {
+      _remoteConfigService = null;
+      _revenueCatService = null;
+      _subscriptionCheckFuture = null;
+    });
+  }
+}
+
+class _SubscriptionInitializationBlockedScreen extends StatelessWidget {
+  const _SubscriptionInitializationBlockedScreen({required this.onRetry});
+
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xff0d0d0d),
+      body: SafeArea(
+        child: Center(
+          child: Padding(
+            padding: EdgeInsets.symmetric(horizontal: 28.w),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Image.asset('assets/logo.png', width: 110.w),
+                SizedBox(height: 24.h),
+                Text(
+                  'Subscription check unavailable',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 20.sp,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                SizedBox(height: 10.h),
+                Text(
+                  'Connect to the internet and try again. Access cannot be opened until your subscription status is verified.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.white60, fontSize: 13.sp),
+                ),
+                SizedBox(height: 24.h),
+                FilledButton(
+                  onPressed: onRetry,
+                  child: const Text('Try again'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:firebase_remote_config/firebase_remote_config.dart';
 
+import '../../../app/app_config.dart';
 import '../models/subscription_tier.dart';
 
 /// Reads subscription-tier flags from Firebase Remote Config so pricing
@@ -30,6 +31,8 @@ class RemoteConfigService {
       'subscription_offering_extreme_international';
   static const String _keyDeveloperRedeemEnabled =
       'subscription_developer_redeem_enabled';
+  static const String _keyInternalTrialHours =
+      'subscription_internal_trial_hours';
 
   // ── Defaults (applied before first fetch) ──────────────────────────
 
@@ -54,6 +57,7 @@ class RemoteConfigService {
       _keyExtremeIndiaOffering: _defaultExtremeIndiaOffering,
       _keyExtremeInternationalOffering: _defaultExtremeInternationalOffering,
       _keyDeveloperRedeemEnabled: false,
+      _keyInternalTrialHours: 6,
     });
 
     await _remoteConfig.setConfigSettings(
@@ -93,8 +97,21 @@ class RemoteConfigService {
     return value > 0 ? value : null;
   }
 
+  /// Two independent gates are intentional. Remote Config can turn internal
+  /// redemption off, but it can never turn it on inside a public binary.
   bool get developerRedeemEnabled =>
+      AppConfig.isInternalBuild &&
       _remoteConfig.getBool(_keyDeveloperRedeemEnabled);
+
+  int get internalTrialHours {
+    if (!AppConfig.isInternalBuild) return 0;
+    final configured = _remoteConfig.getInt(_keyInternalTrialHours);
+    return configured.clamp(1, 48).toInt();
+  }
+
+  Duration get enforcementGraceDuration => AppConfig.isInternalBuild
+      ? Duration(hours: internalTrialHours)
+      : Duration(days: gracePeriodDays);
 
   String offeringId({required SubscriptionTier tier, required bool isIndia}) {
     final key = switch ((tier, isIndia)) {

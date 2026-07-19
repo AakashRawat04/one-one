@@ -25,6 +25,7 @@ class SubscriptionGracePeriodStore {
     required SubscriptionTier tier,
     required int gracePeriodDays,
     required int? remoteExtremeActivatedAtMs,
+    Duration? graceDuration,
   }) async {
     if (tier != SubscriptionTier.extreme) {
       await _preferences.remove(_localExtremeStartedAtKey);
@@ -40,6 +41,8 @@ class SubscriptionGracePeriodStore {
       await _preferences.setInt(_localExtremeStartedAtKey, startedAt);
     }
 
-    return startedAt + gracePeriodDays * const Duration(days: 1).inMilliseconds;
+    final duration =
+        graceDuration ?? Duration(days: gracePeriodDays);
+    return startedAt + duration.inMilliseconds;
   }
 }

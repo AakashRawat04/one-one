@@ -24,7 +24,9 @@ flutter run
 
 RevenueCat builds also require the public platform SDK key via
 `ONE_ONE_REVENUECAT_ANDROID_API_KEY` / `ONE_ONE_REVENUECAT_APPLE_API_KEY` dart
-defines. See `requirements/revenuecat-subscription-setup.md` for the product,
+defines. Internal builds must explicitly add
+`ONE_ONE_BUILD_AUDIENCE=internal`; omitted or invalid values are public and can
+never show developer redemption. See `requirements/revenuecat-subscription-setup.md` for the product,
 offering, Remote Config, grace-period, and developer-code rollout checklist.
 
 Phase 1 still contains a LiveKit background-audio spike under `lib/phase1_spike/`.
@@ -41,11 +43,14 @@ Runtime verification must be done manually on Android devices with a valid Fireb
 
 ## Android Nudges
 
-The home-screen notification button opens Push, Ring, and Voice nudge actions.
+The home-screen notification button opens an in-context bottom sheet for quick
+3/5/10-second Ring and Push nudges; Voice remains available from that sheet.
 Voice recordings are AAC/M4A, mono, 64 kbps, and capped at six seconds. Incoming
 Ring and Voice nudges are handled by native Android services and can play while
 the screen is locked or the Flutter process is absent, provided the app has not
 been force-stopped and the device is online.
+Actionable notifications support Accept, Busy 5 min, and Decline. Ring and
+Voice notifications remain in Notification Center after playback.
 
 Deploy the backend and Firebase rules described in
 `requirements/android-nudge-delivery.md` before device testing.

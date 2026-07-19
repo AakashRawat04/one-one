@@ -49,7 +49,15 @@ class VoiceNudgePlaybackService : Service() {
         )
         startForeground(
             VoiceNudgeNotifications.idFor(request.eventId),
-            VoiceNudgeNotifications.build(this, request.senderName, "Preparing nudge…", true),
+            VoiceNudgeNotifications.build(
+                this,
+                request.eventId,
+                request.groupId,
+                request.responseUrl,
+                request.senderName,
+                "Preparing nudge…",
+                true,
+            ),
         )
         if (active?.eventId != request.eventId && queue.none { it.eventId == request.eventId }) {
             queue.add(request)
@@ -89,8 +97,10 @@ class VoiceNudgePlaybackService : Service() {
                 VoiceNudgeDiagnostics.tag,
                 "[FCM-12] Starting ring durationMs=${request.durationMs}",
             )
-            toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, 90).also {
-                it.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, request.durationMs.toInt())
+            toneGenerator = ToneGenerator(AudioManager.STREAM_ALARM, 90).also {
+                check(it.startTone(ToneGenerator.TONE_SUP_RINGTONE)) {
+                    "Android tone generator refused to start"
+                }
             }
             mainHandler.postDelayed({ finishActive(success = true) }, request.durationMs)
         } catch (error: RuntimeException) {
@@ -237,24 +247,46 @@ class VoiceNudgePlaybackService : Service() {
         releasePlayback()
         active = null
         val manager = getSystemService(NotificationManager::class.java)
-        if (!success) {
-            manager.notify(
-                VoiceNudgeNotifications.idFor(request.eventId),
-                VoiceNudgeNotifications.build(this, request.senderName, "Nudge could not be played", false),
-            )
-        } else {
-            manager.cancel(VoiceNudgeNotifications.idFor(request.eventId))
+        val finalStatus = when {
+            !success -> "Nudge could not be played"
+            request.kind == VoiceNudgeContract.kindRing ->
+                "${request.durationMs / 1000}-second ring received"
+            else -> "Voice nudge received"
         }
         if (queue.isEmpty()) {
             releaseWakeLock()
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopForeground(STOP_FOREGROUND_DETACH)
             } else {
                 @Suppress("DEPRECATION")
-                stopForeground(true)
+                stopForeground(false)
             }
+            manager.notify(
+                VoiceNudgeNotifications.idFor(request.eventId),
+                VoiceNudgeNotifications.build(
+                    this,
+                    request.eventId,
+                    request.groupId,
+                    request.responseUrl,
+                    request.senderName,
+                    finalStatus,
+                    false,
+                ),
+            )
             stopSelf()
         } else {
+            manager.notify(
+                VoiceNudgeNotifications.idFor(request.eventId),
+                VoiceNudgeNotifications.build(
+                    this,
+                    request.eventId,
+                    request.groupId,
+                    request.responseUrl,
+                    request.senderName,
+                    finalStatus,
+                    false,
+                ),
+            )
             processNext()
         }
     }
@@ -299,7 +331,15 @@ class VoiceNudgePlaybackService : Service() {
         val manager = getSystemService(NotificationManager::class.java)
         manager.notify(
             VoiceNudgeNotifications.idFor(request.eventId),
-            VoiceNudgeNotifications.build(this, request.senderName, status, true),
+            VoiceNudgeNotifications.build(
+                this,
+                request.eventId,
+                request.groupId,
+                request.responseUrl,
+                request.senderName,
+                status,
+                true,
+            ),
         )
     }
 
@@ -308,6 +348,7 @@ class VoiceNudgePlaybackService : Service() {
         val eventId = getStringExtra(VoiceNudgeContract.extraEventId) ?: return null
         val senderName = getStringExtra(VoiceNudgeContract.extraSenderName) ?: "Someone"
         val durationMs = getLongExtra(VoiceNudgeContract.extraDurationMs, 0).coerceIn(250, 10_000)
+        val groupId = getStringExtra(VoiceNudgeContract.extraGroupId) ?: return null
         return NudgeRequest(
             kind = kind,
             eventId = eventId,
@@ -316,6 +357,8 @@ class VoiceNudgePlaybackService : Service() {
             audioUrl = getStringExtra(VoiceNudgeContract.extraAudioUrl),
             ackUrl = getStringExtra(VoiceNudgeContract.extraAckUrl),
             deliveryToken = getStringExtra(VoiceNudgeContract.extraDeliveryToken),
+            groupId = groupId,
+            responseUrl = getStringExtra(VoiceNudgeContract.extraResponseUrl),
         )
     }
 
@@ -329,6 +372,8 @@ class VoiceNudgePlaybackService : Service() {
         val audioUrl: String?,
         val ackUrl: String?,
         val deliveryToken: String?,
+        val groupId: String,
+        val responseUrl: String?,
     )
 
     companion object {

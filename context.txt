@@ -1,0 +1,30 @@
+Nudge Notification Behavior
+Push notifications persist in notification center correctly
+Voice and ring nudges not staying in notification center after ringing: need to fix
+Action buttons needed on notifications:
+“Snooze” or “5-minute wait” option so the recipient knows the sender is busy but returning soon
+
+Nudge Acceptance Flow
+Current flow requires both users to be online simultaneously: not the intended behavior
+Target flow:
+User A sends nudge without being online
+User B receives nudge and accepts via action button or in-app UX
+Both users come online together once accepted
+Decline/snooze options also needed if User B can’t join
+
+Home Screen Nudge UX
+Current nudge entry point (top-left home screen button) feels slow and non-intuitive
+Opens a separate full screen with multiple sections: too many steps
+Proposed direction: bottom sheet or bottom panel anchored to home screen
+Covers bottom quarter to half of screen
+Keeps nudge action quick, contextual, and visible without leaving home screen
+
+Next Steps
+Fix voice and ring nudge persistence in notification center
+These nudge types should remain visible after ringing, matching push notification behavior.
+Add snooze/5-minute action button to nudge notifications
+Lets the recipient signal they're busy but returning, without opening the app.
+Redesign nudge acceptance flow for async triggering
+Sender should not need to be online; acceptance by recipient should bring both users online together.
+Redesign home screen nudge entry point as a bottom panel
+Replace the current full-screen flow with a quick, in-context bottom sheet on the home screen.

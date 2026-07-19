@@ -187,6 +187,11 @@ class RevenueCatService {
   }
 
   Future<bool> redeemDeveloperCode(String code) async {
+    if (!AppConfig.isInternalBuild ||
+        !remoteConfigService.developerRedeemEnabled) {
+      debugPrint('Developer redemption rejected by build/config boundary.');
+      return false;
+    }
     try {
       final redeemed = await developerAccessService.redeem(code);
       if (!redeemed) return false;
@@ -257,6 +262,7 @@ class RevenueCatService {
       tier: tier,
       gracePeriodDays: graceDays,
       remoteExtremeActivatedAtMs: remoteConfigService.extremeActivatedAtMs,
+      graceDuration: remoteConfigService.enforcementGraceDuration,
     );
     return SubscriptionState(
       isSubscribed: isSubscribed,
@@ -264,6 +270,7 @@ class RevenueCatService {
       activeTier: tier,
       gracePeriodDays: graceDays,
       developerRedeemEnabled: remoteConfigService.developerRedeemEnabled,
+      requiresImmediateSubscription: !AppConfig.isInternalBuild,
       graceEndsAt: graceEndsAt,
       expirationDate: expirationDate,
     );

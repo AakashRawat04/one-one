@@ -26,6 +26,23 @@ void main() {
     expect(result, 1000 + 14 * dayMs);
   });
 
+  test('supports an internal short trial duration without changing public days', () async {
+    final prefs = await SharedPreferences.getInstance();
+    final store = SubscriptionGracePeriodStore(
+      preferences: prefs,
+      nowMs: () => 9000,
+    );
+
+    final result = await store.resolveGraceEndsAt(
+      tier: SubscriptionTier.extreme,
+      gracePeriodDays: 7,
+      remoteExtremeActivatedAtMs: 1000,
+      graceDuration: const Duration(hours: 6),
+    );
+
+    expect(result, 1000 + const Duration(hours: 6).inMilliseconds);
+  });
+
   test(
     'persists first local observation when rollout timestamp is absent',
     () async {

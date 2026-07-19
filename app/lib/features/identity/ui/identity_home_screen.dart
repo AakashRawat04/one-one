@@ -21,6 +21,8 @@ import '../../online/data/online_repository.dart';
 import '../../online/livekit_status.dart';
 import '../../online/models/member_availability.dart';
 import '../../online/models/online_session.dart';
+import '../../nudges/data/android_voice_nudge_bridge.dart';
+import '../../nudges/data/nudge_repository.dart';
 import '../../nudges/ui/nudge_screen.dart';
 import '../../talk/data/hand_raise_repository.dart';
 import '../../talk/data/talk_repository.dart';
@@ -56,6 +58,9 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
   final OnlineRepository _onlineRepository = OnlineRepository();
   final TalkRepository _talkRepository = TalkRepository();
   final HandRaiseRepository _handRaiseRepository = HandRaiseRepository();
+  final AndroidVoiceNudgeBridge _nudgeActionBridge =
+      AndroidVoiceNudgeBridge();
+  final NudgeRepository _nudgeRepository = NudgeRepository();
 
   late IdentitySession _session;
   List<GroupSummary> _groups = const [];
@@ -70,6 +75,8 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
   StreamSubscription<DatabaseEvent>? _membersSubscription;
   StreamSubscription<DatabaseEvent>? _handRaiseSubscription;
   StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
+  StreamSubscription<void>? _nudgeActionSubscription;
+  StreamSubscription<void>? _registrationRenewalSubscription;
 
   OnlineSession? _onlineSession;
   TalkSession? _talkSession;
@@ -94,6 +101,8 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
   List<ConnectivityResult> _connectivity = const [];
   bool _registrationRefreshInFlight = false;
   DateTime? _lastRegistrationRefreshAt;
+  NudgeNotificationAction? _deferredNudgeAction;
+  bool _nudgeActionInFlight = false;
 
   @override
   void initState() {
@@ -105,6 +114,13 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
       _onIdentitySessionChanged,
     );
     AccentThemeController.setAccentKey(_session.settings.accentColorKey);
+    _nudgeActionSubscription = AndroidVoiceNudgeBridge.actionSignals.listen((_) {
+      unawaited(_takePendingNudgeAction());
+    });
+    _registrationRenewalSubscription =
+        AndroidVoiceNudgeBridge.registrationSignals.listen((_) {
+          unawaited(_refreshDeviceRegistration(force: true));
+        });
     unawaited(_startConnectivityMonitoring());
     unawaited(_loadGroups());
   }
@@ -120,6 +136,8 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
     _membersSubscription?.cancel();
     _handRaiseSubscription?.cancel();
     _connectivitySubscription?.cancel();
+    _nudgeActionSubscription?.cancel();
+    _registrationRenewalSubscription?.cancel();
     _heartbeatTimer?.cancel();
     _clearFloatingReactions();
     final activeTalk = _talkSession;
@@ -135,13 +153,15 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       unawaited(_refreshDeviceRegistration());
+      unawaited(_takePendingNudgeAction());
     }
   }
 
-  Future<void> _refreshDeviceRegistration() async {
+  Future<void> _refreshDeviceRegistration({bool force = false}) async {
     final lastRefresh = _lastRegistrationRefreshAt;
     if (_registrationRefreshInFlight ||
-        (lastRefresh != null &&
+        (!force &&
+            lastRefresh != null &&
             DateTime.now().difference(lastRefresh) <
                 const Duration(seconds: 30))) {
       return;
@@ -244,8 +264,52 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
     } finally {
       if (mounted && _loadingGroups) {
         setState(() => _loadingGroups = false);
+        unawaited(_takePendingNudgeAction());
       }
     }
+  }
+
+  Future<void> _takePendingNudgeAction() async {
+    if (_nudgeActionInFlight) return;
+    try {
+      final action =
+          _deferredNudgeAction ??
+          await _nudgeActionBridge.takePendingNudgeAction();
+      if (action == null || !mounted) return;
+      if (_loadingGroups) {
+        _deferredNudgeAction = action;
+        return;
+      }
+      _deferredNudgeAction = null;
+      _nudgeActionInFlight = true;
+      await _processNudgeAction(action);
+    } catch (error) {
+      if (mounted) {
+        setState(() => _message = 'Couldn’t process the nudge action.');
+      }
+    } finally {
+      _nudgeActionInFlight = false;
+    }
+  }
+
+  Future<void> _processNudgeAction(NudgeNotificationAction action) async {
+    final index = _groups.indexWhere(
+      (group) => group.groupId == action.groupId,
+    );
+    if (index < 0) {
+      setState(() => _message = 'That nudge group is no longer available.');
+      return;
+    }
+
+    await _onGroupCarouselChanged(index);
+    if (!mounted) return;
+    if (!_isOnline) await _goOnline();
+    if (!mounted || !_isOnline || action.action != 'accept') return;
+    await _nudgeRepository.respond(
+      groupId: action.groupId,
+      eventId: action.eventId,
+      action: 'accept',
+    );
   }
 
   Future<void> _replaceWithGroupEntry(GroupEntryResolution resolution) async {
@@ -1327,14 +1391,13 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
   void _openNudges() {
     final group = _selectedGroup;
     if (group == null) return;
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => NudgeScreen(
-          group: group,
-          currentUserId: _session.userId,
-          members: _displayMembers,
-          accent: accentColorForKey(_session.settings.accentColorKey),
-        ),
+    unawaited(
+      showNudgeBottomSheet(
+        context,
+        group: group,
+        currentUserId: _session.userId,
+        members: _displayMembers,
+        accent: accentColorForKey(_session.settings.accentColorKey),
       ),
     );
   }

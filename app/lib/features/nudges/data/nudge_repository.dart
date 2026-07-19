@@ -81,6 +81,20 @@ class NudgeRepository {
     return _requireAcceptedDelivery(response);
   }
 
+  Future<Map<String, dynamic>> respond({
+    required String groupId,
+    required String eventId,
+    required String action,
+  }) {
+    if (!const {'accept', 'decline', 'snooze'}.contains(action)) {
+      throw ArgumentError.value(action, 'action');
+    }
+    return _apiClient.postJson(
+      '/v1/groups/$groupId/nudges/$eventId/respond',
+      {'action': action},
+    );
+  }
+
   Map<String, dynamic> _requireAcceptedDelivery(
     Map<String, dynamic> response,
   ) {
