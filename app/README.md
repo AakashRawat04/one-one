@@ -22,12 +22,10 @@ flutter pub get
 flutter run
 ```
 
-RevenueCat builds also require the public platform SDK key via
-`ONE_ONE_REVENUECAT_ANDROID_API_KEY` / `ONE_ONE_REVENUECAT_APPLE_API_KEY` dart
-defines. Internal builds must explicitly add
-`ONE_ONE_BUILD_AUDIENCE=internal`; omitted or invalid values are public and can
-never show developer redemption. See `requirements/revenuecat-subscription-setup.md` for the product,
-offering, Remote Config, grace-period, and developer-code rollout checklist.
+This `restofthework-apartfrom-revenuecat` branch intentionally contains no
+RevenueCat client SDK or subscription startup gate. After Google authentication
+the app continues directly into its normal setup/home flow, so no RevenueCat
+API key or dashboard configuration is required while developing this branch.
 
 Phase 1 still contains a LiveKit background-audio spike under `lib/phase1_spike/`.
 

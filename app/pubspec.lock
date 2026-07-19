@@ -377,30 +377,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.2.7+12"
-  firebase_remote_config:
-    dependency: "direct main"
-    description:
-      name: firebase_remote_config
-      sha256: d642fe803397a142199d1d1f45683021d822af59f989a78ba8f050d9ebede382
-      url: "https://pub.dev"
-    source: hosted
-    version: "6.5.5"
-  firebase_remote_config_platform_interface:
-    dependency: transitive
-    description:
-      name: firebase_remote_config_platform_interface
-      sha256: "04ccfae1e90e218096f5251da42c5aa520b1ef4858b0dcb5f0c9eec0dee58715"
-      url: "https://pub.dev"
-    source: hosted
-    version: "3.0.5"
-  firebase_remote_config_web:
-    dependency: transitive
-    description:
-      name: firebase_remote_config_web
-      sha256: a81e9495eabde81f3ae93fe5d132384522925d6f2cce869510ebef7fe43b1c50
-      url: "https://pub.dev"
-    source: hosted
-    version: "1.10.12"
   fixnum:
     dependency: transitive
     description:
@@ -984,22 +960,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.2.0"
-  purchases_flutter:
-    dependency: "direct main"
-    description:
-      name: purchases_flutter
-      sha256: "15c354a07aeabe1cda32fff84ce3e1d7e6645725cb7f9fca7c0738982d1b499d"
-      url: "https://pub.dev"
-    source: hosted
-    version: "10.4.1"
-  purchases_ui_flutter:
-    dependency: "direct main"
-    description:
-      name: purchases_ui_flutter
-      sha256: "38aa8e5f0a8c5ce35b582098023185c2ba774f83a73ea82c48e6da089d319a19"
-      url: "https://pub.dev"
-    source: hosted
-    version: "10.4.1"
   record:
     dependency: "direct main"
     description:

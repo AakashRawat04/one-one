@@ -1,13 +1,4 @@
 class AppConfig {
-  /// Compile-time distribution guard. The default is deliberately public so
-  /// an omitted dart-define can never expose internal redemption controls.
-  static const String buildAudience = String.fromEnvironment(
-    'ONE_ONE_BUILD_AUDIENCE',
-    defaultValue: 'public',
-  );
-
-  static bool get isInternalBuild => buildAudience == 'internal';
-
   static const String apiBaseUrl = String.fromEnvironment(
     'ONE_ONE_API_BASE_URL',
     defaultValue: 'https://one-one-xw00.onrender.com',
@@ -30,15 +21,4 @@ class AppConfig {
   );
 
   static const String cloudinaryProfileFolder = 'one_one/profile_photos';
-
-  // RevenueCat public SDK keys are supplied per build/environment. They are
-  // intentionally not stored in source control and are not secret server API
-  // keys. Pass them with --dart-define for Android and iOS builds.
-  static const String revenueCatAndroidApiKey = String.fromEnvironment(
-    'ONE_ONE_REVENUECAT_ANDROID_API_KEY',
-  );
-
-  static const String revenueCatAppleApiKey = String.fromEnvironment(
-    'ONE_ONE_REVENUECAT_APPLE_API_KEY',
-  );
 }
