@@ -7,7 +7,7 @@ object VoiceNudgeContract {
     const val flutterChannel = "app.oneone/voice_nudge"
     const val notificationChannelId = "voice_nudges"
     const val notificationChannelName = "Voice nudges"
-    const val generalNotificationChannelId = "walkie_alerts"
+    const val generalNotificationChannelId = "walkie_alerts_v2"
     const val generalNotificationChannelName = "One One alerts"
 
     const val extraKind = "kind"
@@ -21,6 +21,7 @@ object VoiceNudgeContract {
     const val extraResponseUrl = "responseUrl"
     const val extraAction = "nudgeAction"
     const val extraNotificationId = "notificationId"
+    const val extraSnoozeMinutes = "snoozeMinutes"
 
     const val kindVoice = "voice_nudge"
     const val kindRing = "ring_nudge"

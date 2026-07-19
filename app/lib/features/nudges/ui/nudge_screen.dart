@@ -2,11 +2,13 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:record/record.dart';
 
 import '../../../core/network/api_client.dart';
 import '../../groups/models/group_member_summary.dart';
 import '../../groups/models/group_summary.dart';
+import '../../identity/ui/profile_avatar.dart';
 import '../data/nudge_repository.dart';
 
 Future<void> showNudgeBottomSheet(
@@ -20,9 +22,9 @@ Future<void> showNudgeBottomSheet(
     context: context,
     isScrollControlled: true,
     useSafeArea: true,
-    backgroundColor: const Color(0xff121212),
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+    backgroundColor: Colors.transparent,
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(28.r)),
     ),
     builder: (_) => _QuickNudgeSheet(
       group: group,
@@ -66,6 +68,7 @@ class _QuickNudgeSheetState extends State<_QuickNudgeSheet> {
   NudgeTarget _target = const NudgeTarget.allFriends();
   bool _busy = false;
   String? _message;
+  bool _messageIsError = false;
 
   List<GroupMemberSummary> get _friends => widget.members
       .where(
@@ -104,10 +107,16 @@ class _QuickNudgeSheetState extends State<_QuickNudgeSheet> {
     setState(() {
       _busy = true;
       _message = null;
+      _messageIsError = false;
     });
     try {
       await action();
-      if (mounted) setState(() => _message = successMessage);
+      if (mounted) {
+        setState(() {
+          _message = successMessage;
+          _messageIsError = false;
+        });
+      }
     } catch (error) {
       if (!mounted) return;
       final message = error is NudgeDeliveryException
@@ -115,7 +124,10 @@ class _QuickNudgeSheetState extends State<_QuickNudgeSheet> {
           : error is ApiException && error.code == 'nudge_rate_limited'
           ? error.message
           : 'Couldn’t send the nudge. Check your connection.';
-      setState(() => _message = message);
+      setState(() {
+        _message = message;
+        _messageIsError = true;
+      });
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -123,124 +135,485 @@ class _QuickNudgeSheetState extends State<_QuickNudgeSheet> {
 
   @override
   Widget build(BuildContext context) {
-    return FractionallySizedBox(
-      heightFactor: 0.5,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 10, 20, 20),
+    final actionEnabled = !_busy && _friends.isNotEmpty;
+    return Container(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.sizeOf(context).height * 0.72,
+      ),
+      decoration: BoxDecoration(
+        color: const Color(0xff141414),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28.r)),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+      ),
+      child: SingleChildScrollView(
+        padding: EdgeInsets.fromLTRB(20.w, 10.h, 20.w, 22.h),
         child: Column(
+          mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Center(
               child: Container(
-                width: 38,
-                height: 4,
+                width: 38.w,
+                height: 4.h,
                 decoration: BoxDecoration(
                   color: Colors.white24,
                   borderRadius: BorderRadius.circular(999),
                 ),
               ),
             ),
-            const SizedBox(height: 16),
+            SizedBox(height: 18.h),
+            Row(
+              children: [
+                Container(
+                  width: 44.w,
+                  height: 44.w,
+                  decoration: BoxDecoration(
+                    color: widget.accent.withValues(alpha: 0.16),
+                    borderRadius: BorderRadius.circular(14.r),
+                  ),
+                  child: Icon(
+                    Icons.notifications_active_rounded,
+                    color: widget.accent,
+                    size: 22.sp,
+                  ),
+                ),
+                SizedBox(width: 12.w),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Send a nudge',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 19.sp,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      SizedBox(height: 2.h),
+                      Text(
+                        widget.group.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: Colors.white54,
+                          fontSize: 12.sp,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  onPressed: _busy ? null : () => Navigator.of(context).pop(),
+                  icon: const Icon(Icons.close_rounded),
+                  color: Colors.white54,
+                  tooltip: 'Close',
+                ),
+              ],
+            ),
+            SizedBox(height: 20.h),
             Text(
-              'Nudge · ${widget.group.name}',
-              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                color: Colors.white,
+              'SEND TO',
+              style: TextStyle(
+                color: Colors.white38,
+                fontSize: 10.sp,
                 fontWeight: FontWeight.w700,
+                letterSpacing: 1.3,
               ),
             ),
-            const SizedBox(height: 12),
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
+            SizedBox(height: 10.h),
+            SizedBox(
+              height: 78.h,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
                 children: [
-                  ChoiceChip(
-                    label: const Text('Everyone'),
+                  _NudgeRecipient(
+                    label: 'Everyone',
                     selected: _target.targetScope == 'all_friends',
-                    onSelected: _busy
+                    accent: widget.accent,
+                    onTap: _busy
                         ? null
-                        : (_) => setState(
+                        : () => setState(
                             () => _target = const NudgeTarget.allFriends(),
                           ),
+                    avatar: Icon(
+                      Icons.group_rounded,
+                      color: Colors.white,
+                      size: 24.sp,
+                    ),
                   ),
                   for (final friend in _friends) ...[
-                    const SizedBox(width: 8),
-                    ChoiceChip(
-                      label: Text(friend.displayName),
+                    SizedBox(width: 12.w),
+                    _NudgeRecipient(
+                      label: friend.displayName,
                       selected: _target.targetUserId == friend.userId,
-                      onSelected: _busy
+                      accent: widget.accent,
+                      onTap: _busy
                           ? null
-                          : (_) => setState(
+                          : () => setState(
                               () => _target =
                                   NudgeTarget.singleFriend(friend.userId),
                             ),
+                      avatar: ProfileAvatar(
+                        profilePhotoUrl: friend.profilePhotoUrl,
+                        profilePhotoBase64: friend.profilePhotoBase64,
+                        radius: 24.r,
+                        fallback: Text(
+                          friend.displayName.trim().isEmpty
+                              ? '?'
+                              : String.fromCharCode(
+                                  friend.displayName.trim().runes.first,
+                                ).toUpperCase(),
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 17.sp,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
                     ),
                   ],
                 ],
               ),
             ),
-            const Spacer(),
-            const Text(
-              'How long should it ring?',
-              style: TextStyle(color: Colors.white70),
+            SizedBox(height: 18.h),
+            _QuickRingCard(
+              accent: widget.accent,
+              enabled: actionEnabled,
+              busy: _busy,
+              onSelected: _sendRing,
             ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                for (final seconds in const [3, 5, 10]) ...[
-                  if (seconds != 3) const SizedBox(width: 10),
-                  Expanded(
-                    child: FilledButton(
-                      onPressed: _busy || _friends.isEmpty
-                          ? null
-                          : () => _sendRing(seconds),
-                      style: FilledButton.styleFrom(
-                        minimumSize: const Size.fromHeight(58),
-                        backgroundColor: widget.accent,
-                        foregroundColor: Colors.black,
-                      ),
-                      child: Text(
-                        '$seconds sec',
-                        style: const TextStyle(fontWeight: FontWeight.w700),
-                      ),
-                    ),
-                  ),
-                ],
-              ],
-            ),
-            const SizedBox(height: 12),
+            SizedBox(height: 12.h),
             Row(
               children: [
                 Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: _busy || _friends.isEmpty ? null : _sendPush,
-                    icon: const Icon(Icons.notifications_none_rounded),
-                    label: const Text('Push'),
+                  child: _NudgeModeButton(
+                    icon: Icons.notifications_none_rounded,
+                    label: 'Push',
+                    detail: 'Quick alert',
+                    enabled: actionEnabled,
+                    onTap: _sendPush,
                   ),
                 ),
-                const SizedBox(width: 10),
+                SizedBox(width: 10.w),
                 Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: _busy
-                        ? null
-                        : () => Navigator.of(context).pop(true),
-                    icon: const Icon(Icons.mic_none_rounded),
-                    label: const Text('Voice'),
+                  child: _NudgeModeButton(
+                    icon: Icons.mic_none_rounded,
+                    label: 'Voice',
+                    detail: 'Up to 6 sec',
+                    enabled: actionEnabled,
+                    onTap: () => Navigator.of(context).pop(true),
                   ),
                 ),
               ],
             ),
-            if (_message != null) ...[
-              const SizedBox(height: 10),
-              Text(
-                _message!,
-                textAlign: TextAlign.center,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: Colors.white60, fontSize: 12),
+            if (_friends.isEmpty) ...[
+              SizedBox(height: 12.h),
+              const _NudgeStatus(
+                message: 'Invite a friend before sending a nudge.',
+                isError: true,
+              ),
+            ] else if (_message != null) ...[
+              SizedBox(height: 12.h),
+              _NudgeStatus(
+                message: _message!,
+                isError: _messageIsError,
               ),
             ],
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _NudgeRecipient extends StatelessWidget {
+  const _NudgeRecipient({
+    required this.label,
+    required this.selected,
+    required this.accent,
+    required this.avatar,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final Color accent;
+  final Widget avatar;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: 'Send to $label',
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(18.r),
+        child: SizedBox(
+          width: 62.w,
+          child: Column(
+            children: [
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 160),
+                padding: EdgeInsets.all(3.r),
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: const Color(0xff242424),
+                  border: Border.all(
+                    color: selected ? accent : Colors.white12,
+                    width: selected ? 2 : 1,
+                  ),
+                ),
+                child: ClipOval(
+                  child: SizedBox(width: 48.r, height: 48.r, child: avatar),
+                ),
+              ),
+              SizedBox(height: 5.h),
+              Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: selected ? Colors.white : Colors.white54,
+                  fontSize: 10.sp,
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _QuickRingCard extends StatelessWidget {
+  const _QuickRingCard({
+    required this.accent,
+    required this.enabled,
+    required this.busy,
+    required this.onSelected,
+  });
+
+  final Color accent;
+  final bool enabled;
+  final bool busy;
+  final ValueChanged<int> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: EdgeInsets.all(14.r),
+      decoration: BoxDecoration(
+        color: const Color(0xff1b1b1b),
+        borderRadius: BorderRadius.circular(20.r),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.09)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.vibration_rounded, color: accent, size: 19.sp),
+              SizedBox(width: 8.w),
+              Text(
+                'Quick ring',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 14.sp,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const Spacer(),
+              if (busy)
+                SizedBox(
+                  width: 16.r,
+                  height: 16.r,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: accent,
+                  ),
+                )
+              else
+                Text(
+                  'Choose duration',
+                  style: TextStyle(color: Colors.white38, fontSize: 10.sp),
+                ),
+            ],
+          ),
+          SizedBox(height: 12.h),
+          Row(
+            children: [
+              for (final seconds in const [3, 5, 10]) ...[
+                if (seconds != 3) SizedBox(width: 8.w),
+                Expanded(
+                  child: Material(
+                    color: enabled
+                        ? accent.withValues(alpha: 0.14)
+                        : Colors.white.withValues(alpha: 0.04),
+                    borderRadius: BorderRadius.circular(14.r),
+                    child: InkWell(
+                      onTap: enabled ? () => onSelected(seconds) : null,
+                      borderRadius: BorderRadius.circular(14.r),
+                      child: Container(
+                        height: 50.h,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(14.r),
+                          border: Border.all(
+                            color: enabled
+                                ? accent.withValues(alpha: 0.34)
+                                : Colors.white10,
+                          ),
+                        ),
+                        child: Text.rich(
+                          TextSpan(
+                            text: '$seconds',
+                            style: TextStyle(
+                              color: enabled ? Colors.white : Colors.white24,
+                              fontSize: 18.sp,
+                              fontWeight: FontWeight.w800,
+                            ),
+                            children: [
+                              TextSpan(
+                                text: ' sec',
+                                style: TextStyle(
+                                  color: enabled
+                                      ? Colors.white54
+                                      : Colors.white24,
+                                  fontSize: 10.sp,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _NudgeModeButton extends StatelessWidget {
+  const _NudgeModeButton({
+    required this.icon,
+    required this.label,
+    required this.detail,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final String detail;
+  final bool enabled;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: const Color(0xff1b1b1b),
+      borderRadius: BorderRadius.circular(18.r),
+      child: InkWell(
+        onTap: enabled ? onTap : null,
+        borderRadius: BorderRadius.circular(18.r),
+        child: Container(
+          padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 13.h),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(18.r),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.09)),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                icon,
+                color: enabled ? Colors.white : Colors.white24,
+                size: 21.sp,
+              ),
+              SizedBox(width: 9.w),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      label,
+                      style: TextStyle(
+                        color: enabled ? Colors.white : Colors.white24,
+                        fontSize: 13.sp,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    Text(
+                      detail,
+                      style: TextStyle(
+                        color: enabled ? Colors.white38 : Colors.white24,
+                        fontSize: 9.sp,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(
+                Icons.chevron_right_rounded,
+                color: enabled ? Colors.white30 : Colors.white12,
+                size: 18.sp,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _NudgeStatus extends StatelessWidget {
+  const _NudgeStatus({required this.message, required this.isError});
+
+  final String message;
+  final bool isError;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = isError ? const Color(0xffff6b6f) : const Color(0xff9bdc28);
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 10.h),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.09),
+        borderRadius: BorderRadius.circular(14.r),
+        border: Border.all(color: color.withValues(alpha: 0.24)),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            isError ? Icons.error_outline_rounded : Icons.check_circle_outline,
+            color: color,
+            size: 17.sp,
+          ),
+          SizedBox(width: 8.w),
+          Expanded(
+            child: Text(
+              message,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: Colors.white70,
+                fontSize: 11.sp,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

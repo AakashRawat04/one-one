@@ -16,7 +16,8 @@
 
 The same native service produces the three-, five-, and ten-second Ring nudge.
 Ordinary Push nudges now use the same high-priority data path so Android can
-render Accept, Busy 5 min, and Decline actions consistently in every app state.
+render Accept, Snooze (5 or 15 minutes), and Decline actions consistently in
+every app state.
 
 Push notifications are displayed explicitly by the native messaging service in
 every state. Ring and Voice use high-priority data messages so the native

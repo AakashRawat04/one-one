@@ -183,6 +183,13 @@ On the receiver, expect:
 ```
 
 - `[FCM-08]` confirms that a foreground Push/Friend Live notification was displayed.
+- `[FCM-08A]` reports notification permission and `walkie_alerts_v2` channel
+  importance before an actionable foreground Push is posted.
+- `[FCM-W8]` / `[FCM-W9]` now mean a legacy Push lacked action-routing fields;
+  Android still displays a non-actionable foreground fallback instead of
+  dropping it.
+- `[FCM-W1]` with “legacy notification” means an older notification payload
+  lacked `type`; it is also displayed through the foreground fallback.
 - `[FCM-W1..W5]` explains why a native nudge payload was rejected.
 - `[FCM-E3]` means Android refused to start the playback foreground service.
 - `[FCM-E8/E9]` means Android failed to acquire or release the bounded playback wake lock.

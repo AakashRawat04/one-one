@@ -47,8 +47,9 @@ Voice recordings are AAC/M4A, mono, 64 kbps, and capped at six seconds. Incoming
 Ring and Voice nudges are handled by native Android services and can play while
 the screen is locked or the Flutter process is absent, provided the app has not
 been force-stopped and the device is online.
-Actionable notifications support Accept, Busy 5 min, and Decline. Ring and
-Voice notifications remain in Notification Center after playback.
+Actionable notifications support Accept, Decline, and an inline Snooze choice
+for 5 or 15 minutes. Ring and Voice notifications remain in Notification
+Center after playback.
 
 Deploy the backend and Firebase rules described in
 `requirements/android-nudge-delivery.md` before device testing.

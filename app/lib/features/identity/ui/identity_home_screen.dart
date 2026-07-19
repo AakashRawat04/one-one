@@ -271,8 +271,9 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
 
   Future<void> _takePendingNudgeAction() async {
     if (_nudgeActionInFlight) return;
+    NudgeNotificationAction? action;
     try {
-      final action =
+      action =
           _deferredNudgeAction ??
           await _nudgeActionBridge.takePendingNudgeAction();
       if (action == null || !mounted) return;
@@ -284,6 +285,7 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
       _nudgeActionInFlight = true;
       await _processNudgeAction(action);
     } catch (error) {
+      if (action != null) _deferredNudgeAction = action;
       if (mounted) {
         setState(() => _message = 'Couldn’t process the nudge action.');
       }
@@ -304,11 +306,19 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
     await _onGroupCarouselChanged(index);
     if (!mounted) return;
     if (!_isOnline) await _goOnline();
-    if (!mounted || !_isOnline || action.action != 'accept') return;
+    if (!mounted) return;
+    if (!_isOnline) {
+      throw StateError('Could not enter the nudge group.');
+    }
+    if (action.action != 'accept') return;
     await _nudgeRepository.respond(
       groupId: action.groupId,
       eventId: action.eventId,
       action: 'accept',
+    );
+    debugPrint(
+      '[OneOneFCM][DART-07] Accepted nudge and entered group '
+      'eventSuffix=${action.eventId.length <= 6 ? action.eventId : action.eventId.substring(action.eventId.length - 6)}',
     );
   }
 

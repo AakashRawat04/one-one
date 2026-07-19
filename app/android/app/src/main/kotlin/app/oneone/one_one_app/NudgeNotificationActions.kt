@@ -1,6 +1,7 @@
 package app.oneone.one_one_app
 
 import android.app.NotificationManager
+import android.app.RemoteInput
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -82,6 +83,23 @@ class NudgeNotificationActionReceiver : BroadcastReceiver() {
             VoiceNudgeContract.actionSnooze -> "snooze"
             else -> return
         }
+        val snoozeMinutes = if (responseAction == "snooze") {
+            val selected = RemoteInput.getResultsFromIntent(intent)
+                ?.getCharSequence(VoiceNudgeContract.extraSnoozeMinutes)
+                ?.toString()
+                ?.filter { it.isDigit() }
+                ?.toIntOrNull()
+            if (selected != 5 && selected != 15) {
+                Log.w(
+                    VoiceNudgeDiagnostics.tag,
+                    "[NUDGE-ACTION-W2] Invalid snooze selection=$selected",
+                )
+                return
+            }
+            selected
+        } else {
+            null
+        }
         val responseUrl = intent.getStringExtra(VoiceNudgeContract.extraResponseUrl) ?: return
         val eventId = intent.getStringExtra(VoiceNudgeContract.extraEventId) ?: return
         val senderName = intent.getStringExtra(VoiceNudgeContract.extraSenderName) ?: "Friend"
@@ -110,9 +128,9 @@ class NudgeNotificationActionReceiver : BroadcastReceiver() {
             }
             executor.execute {
                 try {
-                    postResponse(responseUrl, idToken, responseAction)
+                    postResponse(responseUrl, idToken, responseAction, snoozeMinutes)
                     val text = if (responseAction == "snooze") {
-                        "You asked $senderName to wait 5 minutes"
+                        "You asked $senderName to wait $snoozeMinutes minutes"
                     } else {
                         "You declined $senderName's nudge"
                     }
@@ -127,7 +145,9 @@ class NudgeNotificationActionReceiver : BroadcastReceiver() {
                     )
                     Log.i(
                         VoiceNudgeDiagnostics.tag,
-                        "[NUDGE-ACTION-01] response=$responseAction eventSuffix=${eventId.takeLast(6)}",
+                        "[NUDGE-ACTION-01] response=$responseAction " +
+                            "snoozeMinutes=${snoozeMinutes ?: "none"} " +
+                            "eventSuffix=${eventId.takeLast(6)}",
                     )
                 } catch (error: Exception) {
                     VoiceNudgeDiagnostics.logFailure("[NUDGE-ACTION-E2] Response upload", error)
@@ -138,7 +158,12 @@ class NudgeNotificationActionReceiver : BroadcastReceiver() {
         }
     }
 
-    private fun postResponse(responseUrl: String, idToken: String, action: String) {
+    private fun postResponse(
+        responseUrl: String,
+        idToken: String,
+        action: String,
+        snoozeMinutes: Int?,
+    ) {
         val connection = URL(responseUrl).openConnection() as HttpURLConnection
         try {
             connection.connectTimeout = 8_000
@@ -148,7 +173,12 @@ class NudgeNotificationActionReceiver : BroadcastReceiver() {
             connection.setRequestProperty("authorization", "Bearer $idToken")
             connection.setRequestProperty("content-type", "application/json")
             connection.outputStream.use {
-                it.write("{\"action\":\"$action\"}".toByteArray())
+                val body = if (action == "snooze") {
+                    "{\"action\":\"snooze\",\"snoozeMinutes\":$snoozeMinutes}"
+                } else {
+                    "{\"action\":\"$action\"}"
+                }
+                it.write(body.toByteArray())
             }
             val responseCode = connection.responseCode
             if (responseCode !in 200..299) {

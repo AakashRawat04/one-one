@@ -16,6 +16,7 @@ export async function respondToNudge(input: {
   eventId: string;
   responderUserId: string;
   action: NudgeResponseAction;
+  snoozeMinutes?: 5 | 15;
 }) {
   await requireActiveGroup(input.groupId);
   await requireActiveGroupMember(input.groupId, input.responderUserId);
@@ -50,16 +51,28 @@ export async function respondToNudge(input: {
     `nudgeResponses/${input.eventId}/${input.responderUserId}`
   );
   const previous = await responseRef.get();
-  if (previous.child("action").val() === input.action) {
+  const snoozeMinutes = input.action === "snooze" ? input.snoozeMinutes : null;
+  if (input.action === "snooze" && snoozeMinutes !== 5 && snoozeMinutes !== 15) {
+    throw new HttpError(
+      400,
+      "invalid_snooze_duration",
+      "Snooze duration must be 5 or 15 minutes."
+    );
+  }
+  if (
+    previous.child("action").val() === input.action &&
+    previous.child("snoozeMinutes").val() === snoozeMinutes
+  ) {
     return {
       eventId: input.eventId,
       action: input.action,
+      snoozeMinutes,
       deduped: true
     };
   }
 
   const now = nowSeconds();
-  const snoozedUntil = input.action === "snooze" ? now + 5 * 60 : null;
+  const snoozedUntil = snoozeMinutes == null ? null : now + snoozeMinutes * 60;
   await db.ref().update({
     [`nudgeResponses/${input.eventId}/${input.responderUserId}`]: {
       eventId: input.eventId,
@@ -67,6 +80,7 @@ export async function respondToNudge(input: {
       responderUserId: input.responderUserId,
       senderUserId,
       action: input.action,
+      snoozeMinutes,
       respondedAt: now,
       snoozedUntil
     },
@@ -78,6 +92,7 @@ export async function respondToNudge(input: {
       metadata: {
         notificationEventId: input.eventId,
         senderUserId,
+        snoozeMinutes,
         snoozedUntil
       },
       createdAt: now
@@ -97,6 +112,7 @@ export async function respondToNudge(input: {
         responderUserId: input.responderUserId,
         responderName,
         responseAction: input.action,
+        snoozeMinutes: snoozeMinutes == null ? "" : String(snoozeMinutes),
         snoozedUntil: snoozedUntil == null ? "" : String(snoozedUntil),
         responseUrl: `${baseUrl}/v1/groups/${input.groupId}/nudges/${input.eventId}/respond`
       }
@@ -109,6 +125,7 @@ export async function respondToNudge(input: {
       checkpoint: "NUDGE-RESPONSE-BE-01",
       eventId: input.eventId,
       action: input.action,
+      snoozeMinutes,
       targetDevices: devices.length,
       sent: pushResult.successCount,
       failed: pushResult.failureCount
@@ -119,6 +136,7 @@ export async function respondToNudge(input: {
   return {
     eventId: input.eventId,
     action: input.action,
+    snoozeMinutes,
     snoozedUntil,
     deduped: false,
     senderDevices: devices.length,

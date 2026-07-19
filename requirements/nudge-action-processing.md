@@ -20,8 +20,8 @@ The implemented product mappings are:
 1. Backend creates `notificationEvents/{groupId}/{eventId}` for Push, Ring, or
    Voice and sends a high-priority data FCM containing `eventId`, `groupId`,
    sender details, and the authenticated response endpoint.
-2. Android builds one actionable notification with Accept, Busy 5 min, and
-   Decline.
+2. Android builds one actionable notification with Accept, Snooze, and
+   Decline. Snooze opens inline Android choices for 5 or 15 minutes.
 3. Accept starts One One through a `PendingIntent`; Flutter consumes the queued
    action, selects the event's group, calls the existing online/LiveKit logic,
    and writes `accept` only after the recipient is live. There is no second
@@ -62,8 +62,10 @@ engine and a persistent one-tap Connect notification for a killed sender.
   `nudge_response=accept` and enters the same group connection path.
 - [ ] Sender process killed: persistent response notification shows Connect;
   tapping it selects the group and connects.
-- [ ] Busy 5 min: app does not open; response contains `action=snooze` and a
-  `snoozedUntil` about 300 seconds later; sender receives the status.
+- [ ] Snooze 5 min: app does not open; response contains `action=snooze`,
+  `snoozeMinutes=5`, and a deadline about 300 seconds later.
+- [ ] Snooze 15 min: app does not open; response contains `action=snooze`,
+  `snoozeMinutes=15`, and a deadline about 900 seconds later.
 - [ ] Decline: app does not open; response contains `action=decline`; sender is
   notified and neither user is auto-connected.
 - [ ] Registration renewal: `[FCM-06]`, `[DART-06]`, and the normal device-sync

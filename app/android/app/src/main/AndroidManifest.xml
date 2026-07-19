@@ -24,7 +24,7 @@
             android:value="true" />
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_channel_id"
-            android:value="walkie_alerts" />
+            android:value="walkie_alerts_v2" />
         <activity
             android:name=".MainActivity"
             android:exported="true"

@@ -46,9 +46,15 @@ const voiceNudgeAckSchema = z.object({
   status: z.enum(["played", "failed"])
 });
 
-const nudgeResponseSchema = z.object({
-  action: z.enum(["accept", "decline", "snooze"])
-});
+const nudgeResponseSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("accept") }),
+  z.object({ action: z.literal("decline") }),
+  z.object({
+    action: z.literal("snooze"),
+    // Preserve compatibility with installed builds that sent a bare snooze.
+    snoozeMinutes: z.union([z.literal(5), z.literal(15)]).default(5)
+  })
+]);
 
 export function createNotificationRoutes() {
   const router = Router();
@@ -103,7 +109,8 @@ export function createNotificationRoutes() {
           groupId,
           eventId,
           responderUserId: authRequest.auth.uid,
-          action: body.action
+          action: body.action,
+          snoozeMinutes: body.action === "snooze" ? body.snoozeMinutes : undefined
         })
       );
     })

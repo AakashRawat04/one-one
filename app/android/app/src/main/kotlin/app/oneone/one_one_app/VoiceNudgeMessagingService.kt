@@ -26,7 +26,15 @@ class VoiceNudgeMessagingService : FirebaseMessagingService() {
         )
         val kind = data["type"]
         if (kind == null) {
-            Log.w(VoiceNudgeDiagnostics.tag, "[FCM-W1] Ignored message without type")
+            if (message.notification != null) {
+                Log.w(
+                    VoiceNudgeDiagnostics.tag,
+                    "[FCM-W1] Legacy notification has no type; displaying foreground fallback",
+                )
+                showForegroundNotification(message, "legacy_notification")
+                return
+            }
+            Log.w(VoiceNudgeDiagnostics.tag, "[FCM-W1] Ignored data message without type")
             return
         }
         when (kind) {
@@ -132,45 +140,83 @@ class VoiceNudgeMessagingService : FirebaseMessagingService() {
         }
         val manager = getSystemService(NOTIFICATION_SERVICE) as android.app.NotificationManager
         val notificationKey = message.messageId ?: "${kind}_${message.sentTime}"
-        manager.notify(
-            VoiceNudgeNotifications.idFor(notificationKey),
-            VoiceNudgeNotifications.buildGeneral(
-                this,
-                message.notification?.title ?: fallbackTitle,
-                message.notification?.body ?: fallbackBody,
-            ),
-        )
-        Log.i(
-            VoiceNudgeDiagnostics.tag,
-            "[FCM-08] Foreground notification displayed type=$kind",
-        )
+        try {
+            manager.notify(
+                VoiceNudgeNotifications.idFor(notificationKey),
+                VoiceNudgeNotifications.buildGeneral(
+                    this,
+                    message.notification?.title ?: fallbackTitle,
+                    message.notification?.body ?: fallbackBody,
+                ),
+            )
+            Log.i(
+                VoiceNudgeDiagnostics.tag,
+                "[FCM-08] Foreground notification displayed type=$kind",
+            )
+        } catch (error: SecurityException) {
+            VoiceNudgeDiagnostics.logFailure("[FCM-E10] Notification permission", error)
+        }
     }
 
     private fun showActionableNotification(message: RemoteMessage) {
         val data = message.data
         val eventId = data["eventId"] ?: run {
-            Log.w(VoiceNudgeDiagnostics.tag, "[FCM-W8] Push nudge has no eventId")
+            Log.w(
+                VoiceNudgeDiagnostics.tag,
+                "[FCM-W8] Legacy Push has no eventId; displaying non-actionable fallback",
+            )
+            showForegroundNotification(message, VoiceNudgeContract.kindPush)
             return
         }
         val groupId = data["groupId"] ?: run {
-            Log.w(VoiceNudgeDiagnostics.tag, "[FCM-W9] Push nudge has no groupId")
+            Log.w(
+                VoiceNudgeDiagnostics.tag,
+                "[FCM-W9] Legacy Push has no groupId; displaying non-actionable fallback",
+            )
+            showForegroundNotification(message, VoiceNudgeContract.kindPush)
             return
         }
         val senderName = data["senderName"]?.take(80).orEmpty().ifBlank { "Someone" }
         val manager = getSystemService(NOTIFICATION_SERVICE) as android.app.NotificationManager
-        manager.notify(
-            VoiceNudgeNotifications.idFor(eventId),
-            VoiceNudgeNotifications.buildActionable(
-                this,
-                eventId,
-                groupId,
-                data["responseUrl"],
-                senderName,
-                "$senderName nudged you",
-                "Accept, wait 5 minutes, or decline",
-            ),
+        val notificationsEnabled = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            manager.areNotificationsEnabled()
+        } else {
+            true
+        }
+        val channelImportance = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            manager.getNotificationChannel(
+                VoiceNudgeContract.generalNotificationChannelId,
+            )?.importance
+        } else {
+            null
+        }
+        Log.i(
+            VoiceNudgeDiagnostics.tag,
+            "[FCM-08A] Foreground display readiness " +
+                "notificationsEnabled=$notificationsEnabled " +
+                "channel=${VoiceNudgeContract.generalNotificationChannelId} " +
+                "importance=${channelImportance ?: "legacy"}",
         )
-        Log.i(VoiceNudgeDiagnostics.tag, "[FCM-08] Actionable push notification displayed")
+        try {
+            manager.notify(
+                VoiceNudgeNotifications.idFor(eventId),
+                VoiceNudgeNotifications.buildActionable(
+                    this,
+                    eventId,
+                    groupId,
+                    data["responseUrl"],
+                    senderName,
+                    "$senderName nudged you",
+                    "Accept, snooze, or decline",
+                ),
+            )
+            Log.i(
+                VoiceNudgeDiagnostics.tag,
+                "[FCM-08] Actionable push notification displayed",
+            )
+        } catch (error: SecurityException) {
+            VoiceNudgeDiagnostics.logFailure("[FCM-E10] Notification permission", error)
+        }
     }
 
     private fun showNudgeResponse(message: RemoteMessage) {
@@ -178,6 +224,7 @@ class VoiceNudgeMessagingService : FirebaseMessagingService() {
         val eventId = data["eventId"] ?: return
         val groupId = data["groupId"] ?: return
         val responseAction = data["responseAction"] ?: return
+        val snoozeMinutes = data["snoozeMinutes"]?.toIntOrNull()
         val responderName = data["responderName"]?.take(80).orEmpty().ifBlank { "Your friend" }
         if (responseAction == "accept") {
             NudgeActionStore.save(
@@ -195,11 +242,13 @@ class VoiceNudgeMessagingService : FirebaseMessagingService() {
                 groupId,
                 responderName,
                 responseAction,
+                snoozeMinutes,
             ),
         )
         Log.i(
             VoiceNudgeDiagnostics.tag,
-            "[NUDGE-ACTION-03] sender received response=$responseAction",
+            "[NUDGE-ACTION-03] sender received response=$responseAction " +
+                "snoozeMinutes=${snoozeMinutes ?: "none"}",
         )
     }
 

@@ -4,6 +4,7 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.app.RemoteInput
 import android.content.Context
 import android.content.Intent
 import android.graphics.Color
@@ -99,7 +100,9 @@ object VoiceNudgeNotifications {
     ): Notification {
         ensureChannels(context)
         val notificationId = idFor(eventId)
-        val openIntent = acceptIntent(context, eventId, groupId, notificationId)
+        val openIntent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
         val contentIntent = PendingIntent.getActivity(
             context,
             requestCode(eventId, "open"),
@@ -138,12 +141,13 @@ object VoiceNudgeNotifications {
         groupId: String,
         responderName: String,
         responseAction: String,
+        snoozeMinutes: Int? = null,
     ): Notification {
         ensureChannels(context)
         val accepted = responseAction == "accept"
         val body = when (responseAction) {
             "accept" -> "Tap Connect to join together"
-            "snooze" -> "They asked you to wait 5 minutes"
+            "snooze" -> "They asked you to wait ${snoozeMinutes ?: 5} minutes"
             else -> "They can’t join right now"
         }
         val openIntent = Intent(context, MainActivity::class.java).apply {
@@ -249,6 +253,13 @@ object VoiceNudgeNotifications {
             ),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
+        val snoozePendingIntentFlags = PendingIntent.FLAG_UPDATE_CURRENT or if (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+        ) {
+            PendingIntent.FLAG_MUTABLE
+        } else {
+            0
+        }
         val snoozePendingIntent = PendingIntent.getBroadcast(
             context,
             requestCode(eventId, "snooze"),
@@ -260,10 +271,20 @@ object VoiceNudgeNotifications {
                 senderName,
                 notificationId,
             ),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            snoozePendingIntentFlags,
         )
+        val snoozeDuration = RemoteInput.Builder(VoiceNudgeContract.extraSnoozeMinutes)
+            .setLabel("Snooze for")
+            .setChoices(arrayOf("5 minutes", "15 minutes"))
+            .setAllowFreeFormInput(false)
+            .build()
+        val snoozeAction = Notification.Action.Builder(
+            0,
+            "Snooze",
+            snoozePendingIntent,
+        ).addRemoteInput(snoozeDuration).build()
         return addAction(Notification.Action.Builder(0, "Accept", acceptPendingIntent).build())
-            .addAction(Notification.Action.Builder(0, "Busy 5 min", snoozePendingIntent).build())
+            .addAction(snoozeAction)
             .addAction(Notification.Action.Builder(0, "Decline", declinePendingIntent).build())
     }
 

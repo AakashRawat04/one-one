@@ -85,13 +85,22 @@ class NudgeRepository {
     required String groupId,
     required String eventId,
     required String action,
+    int? snoozeMinutes,
   }) {
     if (!const {'accept', 'decline', 'snooze'}.contains(action)) {
       throw ArgumentError.value(action, 'action');
     }
+    if (action == 'snooze' &&
+        snoozeMinutes != 5 &&
+        snoozeMinutes != 15) {
+      throw ArgumentError.value(snoozeMinutes, 'snoozeMinutes');
+    }
     return _apiClient.postJson(
       '/v1/groups/$groupId/nudges/$eventId/respond',
-      {'action': action},
+      {
+        'action': action,
+        if (action == 'snooze') 'snoozeMinutes': snoozeMinutes,
+      },
     );
   }
 

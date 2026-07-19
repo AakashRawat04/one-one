@@ -30,7 +30,7 @@ export async function sendPushToTokens(payload: PushPayload) {
     android: {
       priority: "high",
       notification: {
-        channelId: "walkie_alerts"
+        channelId: "walkie_alerts_v2"
       }
     }
   }));
