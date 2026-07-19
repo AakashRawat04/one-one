@@ -12,6 +12,7 @@ import 'package:uuid/uuid.dart';
 
 import '../../../app/accent_theme.dart';
 import '../../../core/firebase/app_database.dart';
+import '../../../core/network/api_client.dart';
 import '../../groups/data/group_repository.dart';
 import '../../groups/data/invite_link_bridge.dart';
 import '../../groups/group_service_readiness.dart';
