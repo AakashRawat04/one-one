@@ -18,7 +18,7 @@ Future<void> showNudgeBottomSheet(
   required List<GroupMemberSummary> members,
   required Color accent,
 }) async {
-  final openVoiceComposer = await showModalBottomSheet<bool>(
+  await showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
     useSafeArea: true,
@@ -28,17 +28,6 @@ Future<void> showNudgeBottomSheet(
       currentUserId: currentUserId,
       members: members,
       accent: accent,
-    ),
-  );
-  if (openVoiceComposer != true || !context.mounted) return;
-  await Navigator.of(context).push(
-    MaterialPageRoute<void>(
-      builder: (_) => NudgeScreen(
-        group: group,
-        currentUserId: currentUserId,
-        members: members,
-        accent: accent,
-      ),
     ),
   );
 }
@@ -61,9 +50,20 @@ class _QuickNudgeSheet extends StatefulWidget {
 }
 
 class _QuickNudgeSheetState extends State<_QuickNudgeSheet> {
+  static const _maxVoiceDuration = Duration(seconds: 6);
+
   final NudgeRepository _repository = NudgeRepository();
+  final AudioRecorder _recorder = AudioRecorder();
+  final Stopwatch _recordingWatch = Stopwatch();
   NudgeTarget _target = const NudgeTarget.allFriends();
+  Timer? _recordingTimer;
+  bool _recording = false;
+  bool _startingRecording = false;
+  bool _finishingRecording = false;
+  bool _pointerHeld = false;
+  bool _sendAfterPointerEnd = true;
   bool _busy = false;
+  Duration _elapsed = Duration.zero;
   String? _message;
   bool _messageIsError = false;
 
@@ -74,6 +74,21 @@ class _QuickNudgeSheetState extends State<_QuickNudgeSheet> {
             member.memberState == 'active',
       )
       .toList(growable: false);
+
+  bool get _canSend =>
+      _friends.isNotEmpty &&
+      !_busy &&
+      !_startingRecording &&
+      !_finishingRecording &&
+      !_recording;
+
+  @override
+  void dispose() {
+    _recordingTimer?.cancel();
+    if (_recording) unawaited(_recorder.stop());
+    unawaited(_recorder.dispose());
+    super.dispose();
+  }
 
   Future<void> _sendRing(int seconds) async {
     await _send(
@@ -100,7 +115,7 @@ class _QuickNudgeSheetState extends State<_QuickNudgeSheet> {
     Future<Object?> Function() action,
     String successMessage,
   ) async {
-    if (_busy || _friends.isEmpty) return;
+    if (!_canSend) return;
     setState(() {
       _busy = true;
       _message = null;
@@ -130,24 +145,183 @@ class _QuickNudgeSheetState extends State<_QuickNudgeSheet> {
     }
   }
 
+  Future<void> _beginRecording() async {
+    if (!_canSend || _startingRecording) return;
+    _startingRecording = true;
+    try {
+      if (!await _recorder.hasPermission()) {
+        if (mounted) {
+          setState(() {
+            _message = 'Microphone permission is required.';
+            _messageIsError = true;
+          });
+        }
+        return;
+      }
+      final file = File(
+        '${Directory.systemTemp.path}/one_one_voice_${DateTime.now().microsecondsSinceEpoch}.m4a',
+      );
+      await _recorder.start(
+        const RecordConfig(
+          encoder: AudioEncoder.aacLc,
+          bitRate: 64000,
+          sampleRate: 44100,
+          numChannels: 1,
+          autoGain: true,
+          echoCancel: true,
+          noiseSuppress: true,
+        ),
+        path: file.path,
+      );
+      if (!mounted) {
+        await _recorder.stop();
+        return;
+      }
+      _recordingWatch
+        ..reset()
+        ..start();
+      _recordingTimer?.cancel();
+      _recordingTimer = Timer.periodic(const Duration(milliseconds: 50), (_) {
+        if (!mounted || !_recording) return;
+        final elapsed = _recordingWatch.elapsed;
+        setState(() => _elapsed = elapsed);
+        if (elapsed >= _maxVoiceDuration) {
+          unawaited(_finishRecording(send: true));
+        }
+      });
+      setState(() {
+        _recording = true;
+        _elapsed = Duration.zero;
+        _message = 'Recording… release to send';
+        _messageIsError = false;
+      });
+      if (!_pointerHeld) {
+        await _finishRecording(send: _sendAfterPointerEnd);
+      }
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _message = _friendlyError(error);
+          _messageIsError = true;
+        });
+      }
+    } finally {
+      _startingRecording = false;
+    }
+  }
+
+  Future<void> _finishRecording({required bool send}) async {
+    if (!_recording || _finishingRecording) return;
+    _finishingRecording = true;
+    _recordingTimer?.cancel();
+    _recordingWatch.stop();
+    final durationMs = _recordingWatch.elapsedMilliseconds.clamp(
+      0,
+      _maxVoiceDuration.inMilliseconds,
+    );
+    if (mounted) {
+      setState(() {
+        _recording = false;
+        _busy = send;
+        _message = send ? 'Sending voice nudge…' : null;
+        _messageIsError = false;
+      });
+    }
+
+    String? path;
+    try {
+      path = await _recorder.stop();
+      if (!send || path == null) return;
+      if (durationMs < 250) {
+        if (mounted) {
+          setState(() {
+            _message = 'Hold a little longer to record.';
+            _messageIsError = true;
+          });
+        }
+        return;
+      }
+      final file = File(path);
+      await _repository.sendVoice(
+        groupId: widget.group.groupId,
+        target: _target,
+        audio: await file.readAsBytes(),
+        durationMs: durationMs,
+      );
+      if (mounted) {
+        setState(() {
+          _message = 'Voice nudge sent';
+          _messageIsError = false;
+        });
+      }
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _message = _friendlyError(error);
+          _messageIsError = true;
+        });
+      }
+    } finally {
+      if (path != null) {
+        try {
+          await File(path).delete();
+        } catch (_) {
+          // The OS cache cleaner is the final fallback.
+        }
+      }
+      _recordingWatch.reset();
+      _finishingRecording = false;
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _elapsed = Duration.zero;
+        });
+      }
+    }
+  }
+
+  String _friendlyError(Object error) {
+    if (error is NudgeDeliveryException) return error.message;
+    if (error is ApiException && error.code == 'nudge_rate_limited') {
+      return error.message;
+    }
+    final text = error.toString();
+    if (text.contains('nudge_rate_limited')) {
+      return 'Nudge limit reached. Please wait before trying again.';
+    }
+    if (text.contains('voice_nudge_too_large')) {
+      return 'Recording was too large. Try again.';
+    }
+    return 'Couldn’t send the nudge. Check your connection.';
+  }
+
   @override
   Widget build(BuildContext context) {
-    final actionEnabled = !_busy && _friends.isNotEmpty;
+    final actionEnabled = _canSend;
+    final voiceEnabled = _canSend;
+    final recordingProgress =
+        (_elapsed.inMilliseconds / _maxVoiceDuration.inMilliseconds).clamp(
+          0.0,
+          1.0,
+        );
     final accent = widget.accent;
 
-    return Material(
-      color: const Color(0xff141414),
-      borderRadius: BorderRadius.vertical(top: Radius.circular(28.r)),
-      clipBehavior: Clip.antiAlias,
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxHeight: MediaQuery.sizeOf(context).height * 0.82,
-        ),
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
+    return PopScope(
+      canPop:
+          !_busy && !_recording && !_startingRecording && !_finishingRecording,
+      child: Material(
+        color: const Color(0xff141414),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28.r)),
+        clipBehavior: Clip.antiAlias,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(context).height * 0.88,
+          ),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
               // ── Drag handle ──
               Center(
                 child: Padding(
@@ -195,7 +369,9 @@ class _QuickNudgeSheetState extends State<_QuickNudgeSheet> {
                     ),
                     IconButton(
                       onPressed:
-                          _busy ? null : () => Navigator.of(context).pop(),
+                          _busy || _recording || _startingRecording
+                          ? null
+                          : () => Navigator.of(context).pop(),
                       icon: const Icon(Icons.close_rounded),
                       color: Colors.white38,
                       iconSize: 20.sp,
@@ -217,11 +393,11 @@ class _QuickNudgeSheetState extends State<_QuickNudgeSheet> {
                       label: 'Everyone',
                       selected: _target.targetScope == 'all_friends',
                       accent: accent,
-                      onTap: _busy
-                          ? null
-                          : () => setState(
+                      onTap: actionEnabled
+                          ? () => setState(
                               () => _target = const NudgeTarget.allFriends(),
-                            ),
+                            )
+                          : null,
                       avatar: Container(
                         color: accent.withValues(alpha: 0.18),
                         child: Icon(
@@ -237,13 +413,13 @@ class _QuickNudgeSheetState extends State<_QuickNudgeSheet> {
                         label: friend.displayName,
                         selected: _target.targetUserId == friend.userId,
                         accent: accent,
-                        onTap: _busy
-                            ? null
-                            : () => setState(
+                        onTap: actionEnabled
+                            ? () => setState(
                                 () => _target = NudgeTarget.singleFriend(
                                   friend.userId,
                                 ),
-                              ),
+                              )
+                            : null,
                         avatar: ProfileAvatar(
                           profilePhotoUrl: friend.profilePhotoUrl,
                           profilePhotoBase64: friend.profilePhotoBase64,
@@ -377,59 +553,138 @@ class _QuickNudgeSheetState extends State<_QuickNudgeSheet> {
 
               _SheetDivider(),
 
-              // ── Voice message (most urgent — last, accent-tinted) ──
-              InkWell(
-                onTap: actionEnabled
-                    ? () => Navigator.of(context).pop(true)
-                    : null,
-                child: Padding(
-                  padding: EdgeInsets.symmetric(
-                    horizontal: 20.w,
-                    vertical: 14.h,
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.mic_none_rounded,
-                        color: actionEnabled ? accent : Colors.white24,
-                        size: 20.sp,
+              // ── Voice message — recorded and sent inside this sheet ──
+              Padding(
+                padding: EdgeInsets.fromLTRB(20.w, 16.h, 20.w, 18.h),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.mic_none_rounded,
+                          color: voiceEnabled || _recording
+                              ? accent
+                              : Colors.white24,
+                          size: 20.sp,
+                        ),
+                        SizedBox(width: 10.w),
+                        Text(
+                          'Voice nudge',
+                          style: TextStyle(
+                            color: voiceEnabled || _recording
+                                ? Colors.white
+                                : Colors.white24,
+                            fontSize: 14.sp,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                    SizedBox(height: 5.h),
+                    Text(
+                      'Press and hold the mic. Your recording is capped at 6 seconds and sent when you release.',
+                      style: TextStyle(
+                        color: voiceEnabled || _recording
+                            ? Colors.white38
+                            : Colors.white12,
+                        fontSize: 11.sp,
+                        height: 1.4,
                       ),
-                      SizedBox(width: 12.w),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Voice message',
-                              style: TextStyle(
-                                color: actionEnabled
-                                    ? Colors.white
-                                    : Colors.white24,
-                                fontSize: 14.sp,
-                                fontWeight: FontWeight.w700,
-                              ),
+                    ),
+                    SizedBox(height: 16.h),
+                    Center(
+                      child: Listener(
+                        onPointerDown: (_) {
+                          if (!voiceEnabled) return;
+                          _pointerHeld = true;
+                          _sendAfterPointerEnd = true;
+                          unawaited(_beginRecording());
+                        },
+                        onPointerUp: (_) {
+                          _pointerHeld = false;
+                          _sendAfterPointerEnd = true;
+                          unawaited(_finishRecording(send: true));
+                        },
+                        onPointerCancel: (_) {
+                          _pointerHeld = false;
+                          _sendAfterPointerEnd = false;
+                          unawaited(_finishRecording(send: false));
+                        },
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 160),
+                          width: 104.r,
+                          height: 104.r,
+                          decoration: BoxDecoration(
+                            color: _recording
+                                ? accent
+                                : const Color(0xff202020),
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: _recording
+                                  ? accent
+                                  : Colors.white.withValues(alpha: 0.09),
                             ),
-                            Text(
-                              'Up to 6 sec',
-                              style: TextStyle(
-                                color: actionEnabled
-                                    ? accent.withValues(alpha: 0.55)
-                                    : Colors.white12,
-                                fontSize: 11.sp,
+                            boxShadow: _recording
+                                ? [
+                                    BoxShadow(
+                                      color: accent.withValues(alpha: 0.35),
+                                      blurRadius: 26.r,
+                                    ),
+                                  ]
+                                : null,
+                          ),
+                          child: Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              Padding(
+                                padding: EdgeInsets.all(6.r),
+                                child: CircularProgressIndicator(
+                                  value: _recording ? recordingProgress : 0,
+                                  strokeWidth: 4.r,
+                                  color: Colors.white,
+                                  backgroundColor: Colors.white24,
+                                ),
                               ),
-                            ),
-                          ],
+                              if (_startingRecording)
+                                Padding(
+                                  padding: EdgeInsets.all(39.r),
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2.r,
+                                    color: accent,
+                                  ),
+                                )
+                              else
+                                Icon(
+                                  _recording
+                                      ? Icons.mic_rounded
+                                      : Icons.mic_none_rounded,
+                                  size: 42.sp,
+                                  color: _recording
+                                      ? Colors.black
+                                      : voiceEnabled
+                                      ? Colors.white
+                                      : Colors.white24,
+                                ),
+                            ],
+                          ),
                         ),
                       ),
-                      Icon(
-                        Icons.arrow_forward_rounded,
-                        color: actionEnabled
-                            ? accent.withValues(alpha: 0.5)
-                            : Colors.white12,
-                        size: 16.sp,
+                    ),
+                    SizedBox(height: 9.h),
+                    Center(
+                      child: Text(
+                        _recording
+                            ? '${(_elapsed.inMilliseconds / 1000).toStringAsFixed(1)} / 6.0 sec'
+                            : 'Hold to record · release to send',
+                        style: TextStyle(
+                          color: _recording ? accent : Colors.white30,
+                          fontSize: 10.sp,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ),
 
@@ -446,8 +701,9 @@ class _QuickNudgeSheetState extends State<_QuickNudgeSheet> {
                 ),
               ],
 
-              SizedBox(height: 28.h),
-            ],
+                SizedBox(height: 28.h),
+              ],
+            ),
           ),
         ),
       ),
@@ -611,437 +867,6 @@ class _NudgeStatus extends StatelessWidget {
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class NudgeScreen extends StatefulWidget {
-  const NudgeScreen({
-    super.key,
-    required this.group,
-    required this.currentUserId,
-    required this.members,
-    required this.accent,
-  });
-
-  final GroupSummary group;
-  final String currentUserId;
-  final List<GroupMemberSummary> members;
-  final Color accent;
-
-  @override
-  State<NudgeScreen> createState() => _NudgeScreenState();
-}
-
-class _NudgeScreenState extends State<NudgeScreen> {
-  static const _maxVoiceDuration = Duration(seconds: 6);
-
-  final NudgeRepository _repository = NudgeRepository();
-  final AudioRecorder _recorder = AudioRecorder();
-  final Stopwatch _recordingWatch = Stopwatch();
-  NudgeTarget _target = const NudgeTarget.allFriends();
-  Timer? _recordingTimer;
-  bool _recording = false;
-  bool _startingRecording = false;
-  bool _finishingRecording = false;
-  bool _pointerHeld = false;
-  bool _sendAfterPointerEnd = true;
-  bool _busy = false;
-  Duration _elapsed = Duration.zero;
-  String? _message;
-
-  List<GroupMemberSummary> get _friends => widget.members
-      .where(
-        (member) =>
-            member.userId != widget.currentUserId &&
-            member.memberState == 'active',
-      )
-      .toList(growable: false);
-
-  bool get _canSend =>
-      _friends.isNotEmpty &&
-      !_busy &&
-      !_startingRecording &&
-      !_finishingRecording;
-
-  @override
-  void dispose() {
-    _recordingTimer?.cancel();
-    if (_recording) unawaited(_recorder.stop());
-    unawaited(_recorder.dispose());
-    super.dispose();
-  }
-
-  Future<void> _sendPush() async {
-    await _runSend(
-      () => _repository.sendPush(
-        groupId: widget.group.groupId,
-        target: _target,
-      ),
-      'Notification nudge sent',
-    );
-  }
-
-  Future<void> _sendRing(int durationSeconds) async {
-    await _runSend(
-      () => _repository.sendRing(
-        groupId: widget.group.groupId,
-        target: _target,
-        durationSeconds: durationSeconds,
-      ),
-      '$durationSeconds second ring sent',
-    );
-  }
-
-  Future<void> _runSend(
-    Future<Object?> Function() action,
-    String successMessage,
-  ) async {
-    if (!_canSend) return;
-    setState(() {
-      _busy = true;
-      _message = null;
-    });
-    try {
-      await action();
-      if (mounted) setState(() => _message = successMessage);
-    } catch (error) {
-      if (mounted) setState(() => _message = _friendlyError(error));
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  Future<void> _beginRecording() async {
-    if (!_canSend || _recording || _startingRecording) return;
-    _startingRecording = true;
-    try {
-      if (!await _recorder.hasPermission()) {
-        if (mounted) {
-          setState(() => _message = 'Microphone permission is required.');
-        }
-        return;
-      }
-      final file = File(
-        '${Directory.systemTemp.path}/one_one_voice_${DateTime.now().microsecondsSinceEpoch}.m4a',
-      );
-      await _recorder.start(
-        const RecordConfig(
-          encoder: AudioEncoder.aacLc,
-          bitRate: 64000,
-          sampleRate: 44100,
-          numChannels: 1,
-          autoGain: true,
-          echoCancel: true,
-          noiseSuppress: true,
-        ),
-        path: file.path,
-      );
-      if (!mounted) {
-        await _recorder.stop();
-        return;
-      }
-      _recordingWatch
-        ..reset()
-        ..start();
-      _recordingTimer?.cancel();
-      _recordingTimer = Timer.periodic(const Duration(milliseconds: 50), (_) {
-        if (!mounted || !_recording) return;
-        final elapsed = _recordingWatch.elapsed;
-        setState(() => _elapsed = elapsed);
-        if (elapsed >= _maxVoiceDuration) {
-          unawaited(_finishRecording(send: true));
-        }
-      });
-      if (mounted) {
-        setState(() {
-          _recording = true;
-          _elapsed = Duration.zero;
-          _message = 'Recording\u2026 release to send';
-        });
-      }
-      if (!_pointerHeld) {
-        await _finishRecording(send: _sendAfterPointerEnd);
-      }
-    } catch (error) {
-      if (mounted) setState(() => _message = _friendlyError(error));
-    } finally {
-      _startingRecording = false;
-    }
-  }
-
-  Future<void> _finishRecording({required bool send}) async {
-    if (!_recording || _finishingRecording) return;
-    _finishingRecording = true;
-    _recordingTimer?.cancel();
-    _recordingWatch.stop();
-    final durationMs = _recordingWatch.elapsedMilliseconds.clamp(
-      0,
-      _maxVoiceDuration.inMilliseconds,
-    );
-    if (mounted) {
-      setState(() {
-        _recording = false;
-        _busy = send;
-        _message = send ? 'Sending voice nudge\u2026' : null;
-      });
-    }
-
-    String? path;
-    try {
-      path = await _recorder.stop();
-      if (!send || path == null) return;
-      if (durationMs < 250) {
-        if (mounted) {
-          setState(() => _message = 'Hold a little longer to record.');
-        }
-        return;
-      }
-      final file = File(path);
-      final bytes = await file.readAsBytes();
-      await _repository.sendVoice(
-        groupId: widget.group.groupId,
-        target: _target,
-        audio: bytes,
-        durationMs: durationMs,
-      );
-      if (mounted) setState(() => _message = 'Voice nudge sent');
-    } catch (error) {
-      if (mounted) setState(() => _message = _friendlyError(error));
-    } finally {
-      if (path != null) {
-        try {
-          await File(path).delete();
-        } catch (_) {
-          // The OS cache cleaner is the final fallback.
-        }
-      }
-      _recordingWatch.reset();
-      _finishingRecording = false;
-      if (mounted) {
-        setState(() {
-          _busy = false;
-          _elapsed = Duration.zero;
-        });
-      }
-    }
-  }
-
-  String _friendlyError(Object error) {
-    if (error is NudgeDeliveryException) return error.message;
-    if (error is ApiException && error.code == 'nudge_rate_limited') {
-      return error.message;
-    }
-    final text = error.toString();
-    if (text.contains('nudge_rate_limited')) {
-      return 'Nudge limit reached. Please wait before trying again.';
-    }
-    if (text.contains('voice_nudge_too_large')) {
-      return 'Recording was too large. Try again.';
-    }
-    return 'Couldn\u2019t send the nudge. Check your connection.';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final progress =
-        (_elapsed.inMilliseconds / _maxVoiceDuration.inMilliseconds)
-            .clamp(0.0, 1.0);
-    return Scaffold(
-      backgroundColor: const Color(0xff0d0d0d),
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        title: Text('Nudge \u00b7 ${widget.group.name}'),
-      ),
-      body: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(20, 8, 20, 28),
-          children: [
-            Text(
-              'Who should receive it?',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                ChoiceChip(
-                  label: const Text('Everyone'),
-                  selected: _target.targetScope == 'all_friends',
-                  onSelected: (_) => setState(
-                    () => _target = const NudgeTarget.allFriends(),
-                  ),
-                ),
-                for (final friend in _friends)
-                  ChoiceChip(
-                    label: Text(friend.displayName),
-                    selected: _target.targetUserId == friend.userId,
-                    onSelected: (_) => setState(
-                      () => _target = NudgeTarget.singleFriend(friend.userId),
-                    ),
-                  ),
-              ],
-            ),
-            if (_friends.isEmpty) ...[
-              const SizedBox(height: 12),
-              const Text(
-                'Add a friend to this group before sending a nudge.',
-                style: TextStyle(color: Colors.white60),
-              ),
-            ],
-            const SizedBox(height: 28),
-            _NudgeCard(
-              icon: Icons.notifications_active_outlined,
-              title: 'Push notification',
-              subtitle: 'A normal notification asking them to come online.',
-              child: FilledButton(
-                onPressed: _canSend ? _sendPush : null,
-                child: const Text('Send notification'),
-              ),
-            ),
-            const SizedBox(height: 14),
-            _NudgeCard(
-              icon: Icons.ring_volume_outlined,
-              title: 'Ring nudge',
-              subtitle:
-                  'Plays while the Android phone is locked or the app process is closed.',
-              child: Wrap(
-                spacing: 10,
-                children: [
-                  for (final seconds in const [3, 5, 10])
-                    OutlinedButton(
-                      onPressed: _canSend ? () => _sendRing(seconds) : null,
-                      child: Text('$seconds sec'),
-                    ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 14),
-            _NudgeCard(
-              icon: Icons.mic_none_rounded,
-              title: 'Voice nudge',
-              subtitle:
-                  'Press and hold. Your recording is capped at 6 seconds and sent on release.',
-              child: Center(
-                child: Listener(
-                  onPointerDown: (_) {
-                    _pointerHeld = true;
-                    _sendAfterPointerEnd = true;
-                    unawaited(_beginRecording());
-                  },
-                  onPointerUp: (_) {
-                    _pointerHeld = false;
-                    _sendAfterPointerEnd = true;
-                    unawaited(_finishRecording(send: true));
-                  },
-                  onPointerCancel: (_) {
-                    _pointerHeld = false;
-                    _sendAfterPointerEnd = false;
-                    unawaited(_finishRecording(send: false));
-                  },
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 160),
-                    width: 104,
-                    height: 104,
-                    decoration: BoxDecoration(
-                      color: _recording
-                          ? widget.accent
-                          : const Color(0xff202020),
-                      shape: BoxShape.circle,
-                      boxShadow: _recording
-                          ? [
-                              BoxShadow(
-                                color: widget.accent.withValues(alpha: 0.35),
-                                blurRadius: 26,
-                              ),
-                            ]
-                          : null,
-                    ),
-                    child: Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.all(6),
-                          child: CircularProgressIndicator(
-                            value: _recording ? progress : 0,
-                            strokeWidth: 4,
-                            color: Colors.white,
-                            backgroundColor: Colors.white24,
-                          ),
-                        ),
-                        Icon(
-                          _recording
-                              ? Icons.mic_rounded
-                              : Icons.mic_none_rounded,
-                          size: 42,
-                          color: _recording ? Colors.black : Colors.white,
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            if (_busy) ...[
-              const SizedBox(height: 20),
-              LinearProgressIndicator(color: widget.accent),
-            ],
-            if (_message != null) ...[
-              const SizedBox(height: 16),
-              Text(
-                _message!,
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: Colors.white70),
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _NudgeCard extends StatelessWidget {
-  const _NudgeCard({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-    required this.child,
-  });
-
-  final IconData icon;
-  final String title;
-  final String subtitle;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: const Color(0xff171717),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: Colors.white12),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(18),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(icon, color: Colors.white70),
-                const SizedBox(width: 10),
-                Text(title, style: Theme.of(context).textTheme.titleMedium),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text(subtitle, style: const TextStyle(color: Colors.white60)),
-            const SizedBox(height: 16),
-            child,
-          ],
-        ),
       ),
     );
   }

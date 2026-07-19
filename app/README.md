@@ -42,7 +42,8 @@ Runtime verification must be done manually on Android devices with a valid Fireb
 ## Android Nudges
 
 The home-screen notification button opens an in-context bottom sheet for quick
-3/5/10-second Ring and Push nudges; Voice remains available from that sheet.
+3/5/10-second Ring and Push nudges. Voice is recorded and sent from the same
+sheet by holding the mic for up to six seconds; there is no separate route.
 Voice recordings are AAC/M4A, mono, 64 kbps, and capped at six seconds. Incoming
 Ring and Voice nudges are handled by native Android services and can play while
 the screen is locked or the Flutter process is absent, provided the app has not
