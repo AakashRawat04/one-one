@@ -25,8 +25,10 @@ playback service can run without Flutter. Their foreground-service notification
 is detached and replaced with an actionable, auto-cancel notification after
 playback, so it remains in Notification Center.
 
-Timed rings use Android's continuous supervisory ringtone and stop it at the
-requested 3/5/10-second deadline. The `voice_nudges` notification channel stays
+Timed rings use an app-owned, repeating two-chime PCM pattern rather than the
+device's call ringtone. A complete 44.1 kHz mono buffer is generated for the
+selected 3/5/10-second duration, so the audible cue itself ends at the requested
+boundary; service cleanup uses that same deadline. The `voice_nudges` notification channel stays
 silent because the foreground service owns voice/ring playback; using a channel
 sound would create a second, duration-uncontrolled sound.
 
@@ -85,8 +87,9 @@ Use two physical Android devices signed into different group members:
 1. Open both apps once and confirm each `userDevices` record contains an
    `fcmToken` and `platform: android`. For new installs, the compatibility-named
    `fcmToken` field contains the registered Firebase Installation ID.
-2. Lock the receiver, send a three-second Ring nudge, and confirm playback plus
-   the foreground notification.
+2. Lock the receiver and send 3-, 5-, and 10-second Ring nudges. Confirm the
+   sound is One One's two-chime pattern (not the call ringtone), measure each
+   from audible start to stop, and confirm it matches the selected duration.
 3. Swipe the receiver from Recents, send a Voice nudge, and confirm it downloads
    and plays without opening Flutter.
 4. Confirm the delivery progresses through `sent`, `downloaded`, and `played`,

@@ -9,6 +9,7 @@ import 'data/group_repository.dart';
 Future<Widget> resolveGroupEntryScreen({
   required IdentitySession session,
   required IdentityRepository identityRepository,
+  String? initialGroupId,
   GroupRepository? groupRepository,
 }) async {
   final repository = groupRepository ?? GroupRepository();
@@ -24,11 +25,13 @@ Future<Widget> resolveGroupEntryScreen({
       return IdentityHomeScreen(
         initialSession: session,
         identityRepository: identityRepository,
+        initialGroupId: initialGroupId,
       );
     case GroupEntryKind.waiting:
       return IdentityHomeScreen(
         initialSession: session,
         identityRepository: identityRepository,
+        initialGroupId: initialGroupId,
       );
   }
 }

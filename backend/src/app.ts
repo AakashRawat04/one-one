@@ -20,7 +20,10 @@ export function createApp() {
     pinoHttp({
       logger,
       autoLogging: {
-        ignore: (request) => request.url === "/healthz"
+        // Invite URLs contain the bearer invite code. Do not copy them into
+        // structured application logs.
+        ignore: (request) =>
+          request.url === "/healthz" || request.url.startsWith("/invite/")
       }
     })
   );

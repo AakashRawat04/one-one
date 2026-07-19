@@ -14,6 +14,7 @@ import '../../identity/ui/identity_home_screen.dart';
 import '../../identity/ui/settings_screen.dart';
 import '../models/group_invite_result.dart';
 import '../models/group_summary.dart';
+import '../data/invite_link_bridge.dart';
 
 class WaitingForGroupMembersScreen extends StatefulWidget {
   const WaitingForGroupMembersScreen({
@@ -105,12 +106,24 @@ class _WaitingForGroupMembersScreenState
     );
   }
 
+  Future<void> _shareInvite() async {
+    try {
+      await InviteLinkBridge().shareInviteLink(widget.invite.inviteUrl);
+    } catch (_) {
+      await Clipboard.setData(ClipboardData(text: widget.invite.inviteUrl));
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Invite link copied')),
+      );
+    }
+  }
+
   Future<void> _copyPin() async {
     await Clipboard.setData(ClipboardData(text: widget.invite.inviteCode));
     if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('PIN copied')));
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Fallback PIN copied')),
+    );
   }
 
   Route<void> _slideUpJoinRoute() {
@@ -193,7 +206,7 @@ class _WaitingForGroupMembersScreenState
                     ),
                     SizedBox(height: 28.h),
                     GestureDetector(
-                      onTap: _copyPin,
+                      onTap: _shareInvite,
                       child: Container(
                         padding: EdgeInsets.symmetric(
                           horizontal: 22.w,
@@ -209,7 +222,7 @@ class _WaitingForGroupMembersScreenState
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Text(
-                              'PIN: ${widget.invite.inviteCode}',
+                              'Share invite link',
                               style: TextStyle(
                                 color: Colors.white,
                                 fontSize: 16.sp,
@@ -219,12 +232,18 @@ class _WaitingForGroupMembersScreenState
                             ),
                             SizedBox(width: 12.w),
                             Icon(
-                              Icons.copy_rounded,
+                              Icons.ios_share_rounded,
                               color: Colors.white,
                               size: 18.sp,
                             ),
                           ],
                         ),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: _copyPin,
+                      child: Text(
+                        'Copy fallback PIN ${widget.invite.inviteCode}',
                       ),
                     ),
                   ],

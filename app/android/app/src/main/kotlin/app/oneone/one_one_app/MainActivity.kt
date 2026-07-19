@@ -14,6 +14,7 @@ import java.security.MessageDigest
 
 class MainActivity : FlutterFragmentActivity() {
     private lateinit var voiceNudgeChannel: MethodChannel
+    private lateinit var inviteLinkChannel: MethodChannel
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -25,6 +26,11 @@ class MainActivity : FlutterFragmentActivity() {
         )
         NudgeActionDispatcher.attach(voiceNudgeChannel)
         captureNudgeAction(intent)
+        inviteLinkChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            InviteLinkContract.flutterChannel,
+        )
+        captureInviteLink(intent)
         voiceNudgeChannel.setMethodCallHandler { call, result ->
             when (call.method) {
                 // Keep the channel name for compatibility with existing Dart and
@@ -93,12 +99,47 @@ class MainActivity : FlutterFragmentActivity() {
                 else -> result.notImplemented()
             }
         }
+        inviteLinkChannel.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "peekPendingInviteCode" -> {
+                    result.success(InviteLinkContract.peekPendingCode(this))
+                }
+                "clearPendingInviteCode" -> {
+                    val code = call.arguments as? String
+                    if (code.isNullOrBlank()) {
+                        result.error("invalid_invite_code", "Invite code is required.", null)
+                    } else {
+                        InviteLinkContract.clearPendingCode(this, code)
+                        result.success(null)
+                    }
+                }
+                "shareInviteLink" -> {
+                    val inviteUrl = call.arguments as? String
+                    if (inviteUrl.isNullOrBlank()) {
+                        result.error("invalid_invite_url", "Invite URL is required.", null)
+                    } else {
+                        val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_SUBJECT, "Join my One One group")
+                            putExtra(
+                                Intent.EXTRA_TEXT,
+                                "Join my group on One One: $inviteUrl",
+                            )
+                        }
+                        startActivity(Intent.createChooser(shareIntent, "Share group invite"))
+                        result.success(null)
+                    }
+                }
+                else -> result.notImplemented()
+            }
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         captureNudgeAction(intent)
+        captureInviteLink(intent)
     }
 
     override fun onDestroy() {
@@ -128,6 +169,30 @@ class MainActivity : FlutterFragmentActivity() {
             VoiceNudgeDiagnostics.tag,
             "[NUDGE-ACTION-02] queued action=$action eventSuffix=${eventId.takeLast(6)}",
         )
+    }
+
+    private fun captureInviteLink(intent: Intent?) {
+        if (intent?.action != Intent.ACTION_VIEW) return
+        val uri = intent.data ?: return
+        val isCustomInvite =
+            uri.scheme.equals(InviteLinkContract.customScheme, ignoreCase = true) &&
+                uri.host.equals(InviteLinkContract.inviteHost, ignoreCase = true)
+        val isHttpsInvite =
+            uri.scheme.equals("https", ignoreCase = true) &&
+                uri.host.equals(InviteLinkContract.httpsHost, ignoreCase = true) &&
+                uri.pathSegments.firstOrNull().equals("invite", ignoreCase = true)
+        if (!isCustomInvite && !isHttpsInvite) return
+        val codeIndex = if (isCustomInvite) 0 else 1
+        val code = uri.pathSegments.getOrNull(codeIndex)
+            ?.trim()
+            ?.uppercase()
+            ?.takeIf { it.matches(Regex("[A-Z0-9_-]{4,64}")) }
+            ?: return
+        InviteLinkContract.savePendingCode(this, code)
+        if (::inviteLinkChannel.isInitialized) {
+            inviteLinkChannel.invokeMethod("onInviteLinkAvailable", null)
+        }
+        Log.i("OneOneInvite", "Invite link captured codeSuffix=${code.takeLast(4)}")
     }
 
     @Suppress("DEPRECATION")

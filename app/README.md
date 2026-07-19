@@ -48,6 +48,8 @@ Voice recordings are AAC/M4A, mono, 64 kbps, and capped at six seconds. Incoming
 Ring and Voice nudges are handled by native Android services and can play while
 the screen is locked or the Flutter process is absent, provided the app has not
 been force-stopped and the device is online.
+Ring nudges use One One's two-chime sound rather than the device call ringtone;
+the generated audio buffer is exactly 3, 5, or 10 seconds long.
 Actionable notifications support Accept, Decline, and an inline Snooze choice
 for 5 or 15 minutes. Ring and Voice notifications remain in Notification
 Center after playback.
@@ -61,6 +63,15 @@ FCM registration uses the Firebase Installation ID flow in Firebase Messaging
 25+. In Firebase, enable the Cloud Messaging API and ensure the Android Firebase
 API key allows both the Firebase Installations API and FCM Registration API.
 Do not put a service-account key or legacy FCM server key in the app.
+
+## Android Invite Links
+
+Creating an invite now exposes a shareable HTTPS link through Android's system
+share sheet, with the PIN retained as fallback. Tapping the link persists it
+through sign-in/onboarding, joins through the existing authenticated endpoint,
+and opens Home with that group selected. Complete the signing-certificate and
+domain setup in `requirements/android-invite-links.md` before testing verified
+App Links.
 
 ## Run
 

@@ -13,6 +13,7 @@ import 'package:uuid/uuid.dart';
 import '../../../app/accent_theme.dart';
 import '../../../core/firebase/app_database.dart';
 import '../../groups/data/group_repository.dart';
+import '../../groups/data/invite_link_bridge.dart';
 import '../../groups/group_service_readiness.dart';
 import '../../groups/models/group_invite_result.dart';
 import '../../groups/models/group_member_summary.dart';
@@ -43,10 +44,12 @@ class IdentityHomeScreen extends StatefulWidget {
     super.key,
     required this.initialSession,
     required this.identityRepository,
+    this.initialGroupId,
   });
 
   final IdentitySession initialSession;
   final IdentityRepository identityRepository;
+  final String? initialGroupId;
 
   @override
   State<IdentityHomeScreen> createState() => _IdentityHomeScreenState();
@@ -61,6 +64,7 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
   final AndroidVoiceNudgeBridge _nudgeActionBridge =
       AndroidVoiceNudgeBridge();
   final NudgeRepository _nudgeRepository = NudgeRepository();
+  final InviteLinkBridge _inviteLinkBridge = InviteLinkBridge();
 
   late IdentitySession _session;
   List<GroupSummary> _groups = const [];
@@ -77,6 +81,7 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
   StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
   StreamSubscription<void>? _nudgeActionSubscription;
   StreamSubscription<void>? _registrationRenewalSubscription;
+  StreamSubscription<void>? _inviteLinkSubscription;
 
   OnlineSession? _onlineSession;
   TalkSession? _talkSession;
@@ -103,6 +108,8 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
   DateTime? _lastRegistrationRefreshAt;
   NudgeNotificationAction? _deferredNudgeAction;
   bool _nudgeActionInFlight = false;
+  bool _inviteJoinInFlight = false;
+  String? _preferredGroupId;
 
   @override
   void initState() {
@@ -110,6 +117,7 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
     WidgetsBinding.instance.addObserver(this);
     _session =
         widget.identityRepository.currentSession ?? widget.initialSession;
+    _preferredGroupId = widget.initialGroupId;
     widget.identityRepository.sessionListenable.addListener(
       _onIdentitySessionChanged,
     );
@@ -121,6 +129,9 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
         AndroidVoiceNudgeBridge.registrationSignals.listen((_) {
           unawaited(_refreshDeviceRegistration(force: true));
         });
+    _inviteLinkSubscription = InviteLinkBridge.linkSignals.listen((_) {
+      unawaited(_takePendingInviteLink());
+    });
     unawaited(_startConnectivityMonitoring());
     unawaited(_loadGroups());
   }
@@ -138,6 +149,7 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
     _connectivitySubscription?.cancel();
     _nudgeActionSubscription?.cancel();
     _registrationRenewalSubscription?.cancel();
+    _inviteLinkSubscription?.cancel();
     _heartbeatTimer?.cancel();
     _clearFloatingReactions();
     final activeTalk = _talkSession;
@@ -154,6 +166,7 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
     if (state == AppLifecycleState.resumed) {
       unawaited(_refreshDeviceRegistration());
       unawaited(_takePendingNudgeAction());
+      unawaited(_takePendingInviteLink());
     }
   }
 
@@ -265,7 +278,53 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
       if (mounted && _loadingGroups) {
         setState(() => _loadingGroups = false);
         unawaited(_takePendingNudgeAction());
+        unawaited(_takePendingInviteLink());
       }
+    }
+  }
+
+  Future<void> _takePendingInviteLink() async {
+    if (_inviteJoinInFlight || _loadingGroups) return;
+    final inviteCode = await _inviteLinkBridge.peekPendingInviteCode();
+    if (inviteCode == null || !mounted) return;
+    _inviteJoinInFlight = true;
+    try {
+      final groupId = await _groupRepository.joinInvite(inviteCode);
+      await _inviteLinkBridge.clearPendingInviteCode(inviteCode);
+      if (!mounted) return;
+      Navigator.of(context).popUntil((route) => route.isFirst);
+      if (!mounted) return;
+      _preferredGroupId = groupId;
+      debugPrint(
+        '[OneOneInvite] Joined link while Home was active groupSuffix='
+        '${groupId.length <= 6 ? groupId : groupId.substring(groupId.length - 6)}',
+      );
+      await _loadGroups();
+      if (mounted) {
+        setState(() => _message = 'Group joined from invite link.');
+      }
+    } catch (error) {
+      debugPrint(
+        '[OneOneInvite] Active invite failed ${error.runtimeType}: $error',
+      );
+      if (error is ApiException &&
+          const {
+            'invite_not_found',
+            'invite_unavailable',
+            'group_full',
+            'group_not_active',
+          }.contains(error.code)) {
+        await _inviteLinkBridge.clearPendingInviteCode(inviteCode);
+      }
+      if (mounted) {
+        setState(() {
+          _message = error is ApiException
+              ? error.message
+              : 'Couldn’t open this invite. Check your connection.';
+        });
+      }
+    } finally {
+      _inviteJoinInFlight = false;
     }
   }
 
@@ -610,60 +669,93 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
                 ),
                 SizedBox(height: 8.h),
                 Text(
-                  'Share this group PIN so they can join',
+                  'Share this link. Your friend will open One One and join this group automatically.',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: Colors.white70, fontSize: 14.sp),
                 ),
                 SizedBox(height: 20.h),
-                GestureDetector(
-                  onTap: () async {
+                Material(
+                  color: const Color(0xff1f1f1f),
+                  borderRadius: BorderRadius.circular(18.r),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(18.r),
+                    onTap: () async {
+                      try {
+                        await InviteLinkBridge().shareInviteLink(
+                          invite.inviteUrl,
+                        );
+                      } catch (_) {
+                        await Clipboard.setData(
+                          ClipboardData(text: invite.inviteUrl),
+                        );
+                        if (!context.mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Invite link copied')),
+                        );
+                      }
+                    },
+                    child: Container(
+                      width: double.infinity,
+                      padding: EdgeInsets.symmetric(
+                        horizontal: 20.w,
+                        vertical: 18.h,
+                      ),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(18.r),
+                        border: Border.all(
+                          color: const Color.fromRGBO(255, 255, 255, 0.12),
+                        ),
+                      ),
+                      child: Column(
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                Icons.ios_share_rounded,
+                                color: Colors.white,
+                                size: 22.sp,
+                              ),
+                              SizedBox(width: 10.w),
+                              Text(
+                                'Share invite link',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 16.sp,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ],
+                          ),
+                          SizedBox(height: 8.h),
+                          Text(
+                            invite.inviteUrl,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: Colors.white54,
+                              fontSize: 11.sp,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                SizedBox(height: 14.h),
+                TextButton.icon(
+                  onPressed: () async {
                     await Clipboard.setData(
                       ClipboardData(text: invite.inviteCode),
                     );
                     if (!context.mounted) return;
-                    Navigator.of(context).pop();
-                    if (!mounted) return;
-                    ScaffoldMessenger.of(
-                      this.context,
-                    ).showSnackBar(const SnackBar(content: Text('PIN copied')));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Fallback PIN copied')),
+                    );
                   },
-                  child: Container(
-                    width: double.infinity,
-                    padding: EdgeInsets.symmetric(
-                      horizontal: 20.w,
-                      vertical: 18.h,
-                    ),
-                    decoration: BoxDecoration(
-                      color: const Color(0xff1f1f1f),
-                      borderRadius: BorderRadius.circular(18.r),
-                      border: Border.all(
-                        color: const Color.fromRGBO(255, 255, 255, 0.12),
-                      ),
-                    ),
-                    child: Column(
-                      children: [
-                        Text(
-                          invite.inviteCode,
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 32.sp,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: 6,
-                          ),
-                        ),
-                        SizedBox(height: 8.h),
-                        Text(
-                          'tap to copy',
-                          style: TextStyle(
-                            color: Colors.white54,
-                            fontSize: 12.sp,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
+                  icon: Icon(Icons.copy_rounded, size: 17.sp),
+                  label: Text('Copy PIN ${invite.inviteCode}'),
                 ),
               ],
             ),
@@ -1377,6 +1469,13 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
 
   GroupSummary? _resolveSelectedGroup(List<GroupSummary> groups) {
     if (groups.isEmpty) return null;
+
+    final preferredGroupId = _preferredGroupId;
+    if (preferredGroupId != null) {
+      for (final group in groups) {
+        if (group.groupId == preferredGroupId) return group;
+      }
+    }
 
     final currentGroup = _selectedGroup;
     if (currentGroup == null) return groups.first;

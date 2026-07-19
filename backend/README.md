@@ -49,6 +49,8 @@ Endpoints:
 POST /v1/groups
 POST /v1/groups/:groupId/invites
 POST /v1/invites/join
+GET  /invite/:inviteCode
+GET  /.well-known/assetlinks.json
 POST /v1/livekit/token
 POST /v1/groups/:groupId/notifications/friend-live
 POST /v1/groups/:groupId/nudges
@@ -74,6 +76,13 @@ recipient has played the nudge.
 SHA-256 hashes in `SUBSCRIPTION_REDEEM_CODE_HASHES`, then grants the authenticated
 Firebase user the `oneOneDeveloper` access claim. Plaintext codes must never be
 stored in the repository or deployment environment.
+
+Group invite creation returns both `inviteCode` and `inviteUrl`. Configure
+`PUBLIC_INVITE_BASE_URL` with the public HTTPS `/invite` base and
+`ANDROID_APP_LINK_SHA256_CERT_FINGERPRINTS` with comma-separated Play/internal
+SHA-256 signing fingerprints. The public invite endpoint redirects to the
+installed Android app as a fallback; `assetlinks.json` enables direct verified
+App Link opening.
 
 ## Build
 
