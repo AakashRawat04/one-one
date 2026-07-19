@@ -146,7 +146,7 @@ object VoiceNudgeNotifications {
         ensureChannels(context)
         val accepted = responseAction == "accept"
         val body = when (responseAction) {
-            "accept" -> "Tap Connect to join together"
+            "accept" -> "Tap to join together"
             "snooze" -> "They asked you to wait ${snoozeMinutes ?: 5} minutes"
             else -> "They can’t join right now"
         }
@@ -171,7 +171,7 @@ object VoiceNudgeNotifications {
             @Suppress("DEPRECATION")
             Notification.Builder(context)
         }
-        builder
+        return builder
             .setSmallIcon(R.drawable.ic_voice_nudge)
             .setContentTitle("$responderName answered your nudge")
             .setContentText(body)
@@ -181,12 +181,7 @@ object VoiceNudgeNotifications {
             .setPriority(Notification.PRIORITY_HIGH)
             .setContentIntent(contentIntent)
             .setAutoCancel(true)
-        if (accepted) {
-            builder.addAction(
-                Notification.Action.Builder(0, "Connect", contentIntent).build(),
-            )
-        }
-        return builder.build()
+            .build()
     }
 
     fun buildGeneral(

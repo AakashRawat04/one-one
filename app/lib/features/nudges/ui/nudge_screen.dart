@@ -23,9 +23,6 @@ Future<void> showNudgeBottomSheet(
     isScrollControlled: true,
     useSafeArea: true,
     backgroundColor: Colors.transparent,
-    shape: RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(28.r)),
-    ),
     builder: (_) => _QuickNudgeSheet(
       group: group,
       currentUserId: currentUserId,
@@ -85,7 +82,7 @@ class _QuickNudgeSheetState extends State<_QuickNudgeSheet> {
         target: _target,
         durationSeconds: seconds,
       ),
-      '$seconds second nudge sent',
+      '${seconds}s ring sent',
     );
   }
 
@@ -95,7 +92,7 @@ class _QuickNudgeSheetState extends State<_QuickNudgeSheet> {
         groupId: widget.group.groupId,
         target: _target,
       ),
-      'Notification nudge sent',
+      'Notification sent',
     );
   }
 
@@ -123,7 +120,7 @@ class _QuickNudgeSheetState extends State<_QuickNudgeSheet> {
           ? error.message
           : error is ApiException && error.code == 'nudge_rate_limited'
           ? error.message
-          : 'Couldn’t send the nudge. Check your connection.';
+          : 'Couldn\u2019t send the nudge. Check your connection.';
       setState(() {
         _message = message;
         _messageIsError = true;
@@ -136,192 +133,375 @@ class _QuickNudgeSheetState extends State<_QuickNudgeSheet> {
   @override
   Widget build(BuildContext context) {
     final actionEnabled = !_busy && _friends.isNotEmpty;
-    return Container(
-      constraints: BoxConstraints(
-        maxHeight: MediaQuery.sizeOf(context).height * 0.72,
-      ),
-      decoration: BoxDecoration(
-        color: const Color(0xff141414),
-        borderRadius: BorderRadius.vertical(top: Radius.circular(28.r)),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-      ),
-      child: SingleChildScrollView(
-        padding: EdgeInsets.fromLTRB(20.w, 10.h, 20.w, 22.h),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Center(
-              child: Container(
-                width: 38.w,
-                height: 4.h,
-                decoration: BoxDecoration(
-                  color: Colors.white24,
-                  borderRadius: BorderRadius.circular(999),
+    final accent = widget.accent;
+
+    return Material(
+      color: const Color(0xff141414),
+      borderRadius: BorderRadius.vertical(top: Radius.circular(28.r)),
+      clipBehavior: Clip.antiAlias,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.sizeOf(context).height * 0.82,
+        ),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // ── Drag handle ──
+              Center(
+                child: Padding(
+                  padding: EdgeInsets.only(top: 10.h, bottom: 14.h),
+                  child: Container(
+                    width: 38.w,
+                    height: 4.h,
+                    decoration: BoxDecoration(
+                      color: Colors.white24,
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                  ),
                 ),
               ),
-            ),
-            SizedBox(height: 18.h),
-            Row(
-              children: [
-                Container(
-                  width: 44.w,
-                  height: 44.w,
-                  decoration: BoxDecoration(
-                    color: widget.accent.withValues(alpha: 0.16),
-                    borderRadius: BorderRadius.circular(14.r),
-                  ),
-                  child: Icon(
-                    Icons.notifications_active_rounded,
-                    color: widget.accent,
-                    size: 22.sp,
-                  ),
+
+              // ── Header ──
+              Padding(
+                padding: EdgeInsets.fromLTRB(20.w, 0, 8.w, 0),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Send a nudge',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 18.sp,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          SizedBox(height: 2.h),
+                          Text(
+                            widget.group.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: Colors.white38,
+                              fontSize: 12.sp,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      onPressed:
+                          _busy ? null : () => Navigator.of(context).pop(),
+                      icon: const Icon(Icons.close_rounded),
+                      color: Colors.white38,
+                      iconSize: 20.sp,
+                    ),
+                  ],
                 ),
-                SizedBox(width: 12.w),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Send a nudge',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 19.sp,
-                          fontWeight: FontWeight.w700,
+              ),
+
+              SizedBox(height: 18.h),
+
+              // ── Recipient picker ──
+              SizedBox(
+                height: 80.h,
+                child: ListView(
+                  scrollDirection: Axis.horizontal,
+                  padding: EdgeInsets.symmetric(horizontal: 20.w),
+                  children: [
+                    _NudgeRecipient(
+                      label: 'Everyone',
+                      selected: _target.targetScope == 'all_friends',
+                      accent: accent,
+                      onTap: _busy
+                          ? null
+                          : () => setState(
+                              () => _target = const NudgeTarget.allFriends(),
+                            ),
+                      avatar: Container(
+                        color: accent.withValues(alpha: 0.18),
+                        child: Icon(
+                          Icons.group_rounded,
+                          color: accent,
+                          size: 22.sp,
                         ),
                       ),
-                      SizedBox(height: 2.h),
-                      Text(
-                        widget.group.name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: Colors.white54,
-                          fontSize: 12.sp,
-                          fontWeight: FontWeight.w500,
+                    ),
+                    for (final friend in _friends) ...[
+                      SizedBox(width: 10.w),
+                      _NudgeRecipient(
+                        label: friend.displayName,
+                        selected: _target.targetUserId == friend.userId,
+                        accent: accent,
+                        onTap: _busy
+                            ? null
+                            : () => setState(
+                                () => _target = NudgeTarget.singleFriend(
+                                  friend.userId,
+                                ),
+                              ),
+                        avatar: ProfileAvatar(
+                          profilePhotoUrl: friend.profilePhotoUrl,
+                          profilePhotoBase64: friend.profilePhotoBase64,
+                          radius: 24.r,
+                          fallback: Text(
+                            friend.displayName.trim().isEmpty
+                                ? '?'
+                                : String.fromCharCode(
+                                    friend.displayName.trim().runes.first,
+                                  ).toUpperCase(),
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 17.sp,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
                         ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+
+              SizedBox(height: 14.h),
+              _SheetDivider(),
+
+              // ── Quick ring (most subtle — listed first) ──
+              Padding(
+                padding: EdgeInsets.symmetric(
+                  horizontal: 20.w,
+                  vertical: 13.h,
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.vibration_rounded,
+                      color: Colors.white38,
+                      size: 17.sp,
+                    ),
+                    SizedBox(width: 10.w),
+                    Text(
+                      'Quick ring',
+                      style: TextStyle(
+                        color: Colors.white54,
+                        fontSize: 13.sp,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const Spacer(),
+                    if (_busy)
+                      SizedBox(
+                        width: 14.r,
+                        height: 14.r,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 1.5,
+                          color: accent,
+                        ),
+                      )
+                    else
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          for (final s in const [3, 5, 10]) ...[
+                            if (s != 3) SizedBox(width: 6.w),
+                            _RingChip(
+                              seconds: s,
+                              accent: accent,
+                              enabled: actionEnabled,
+                              onTap: () => _sendRing(s),
+                            ),
+                          ],
+                        ],
+                      ),
+                  ],
+                ),
+              ),
+
+              _SheetDivider(),
+
+              // ── Push notification (medium urgency — second) ──
+              InkWell(
+                onTap: actionEnabled ? _sendPush : null,
+                child: Padding(
+                  padding: EdgeInsets.symmetric(
+                    horizontal: 20.w,
+                    vertical: 14.h,
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.notifications_none_rounded,
+                        color: actionEnabled ? Colors.white70 : Colors.white24,
+                        size: 20.sp,
+                      ),
+                      SizedBox(width: 12.w),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Push notification',
+                              style: TextStyle(
+                                color: actionEnabled
+                                    ? Colors.white
+                                    : Colors.white24,
+                                fontSize: 14.sp,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            Text(
+                              'Standard alert',
+                              style: TextStyle(
+                                color: actionEnabled
+                                    ? Colors.white38
+                                    : Colors.white12,
+                                fontSize: 11.sp,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Icon(
+                        Icons.arrow_forward_rounded,
+                        color: actionEnabled ? Colors.white24 : Colors.white12,
+                        size: 16.sp,
                       ),
                     ],
                   ),
                 ),
-                IconButton(
-                  onPressed: _busy ? null : () => Navigator.of(context).pop(),
-                  icon: const Icon(Icons.close_rounded),
-                  color: Colors.white54,
-                  tooltip: 'Close',
-                ),
-              ],
-            ),
-            SizedBox(height: 20.h),
-            Text(
-              'SEND TO',
-              style: TextStyle(
-                color: Colors.white38,
-                fontSize: 10.sp,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 1.3,
               ),
-            ),
-            SizedBox(height: 10.h),
-            SizedBox(
-              height: 78.h,
-              child: ListView(
-                scrollDirection: Axis.horizontal,
-                children: [
-                  _NudgeRecipient(
-                    label: 'Everyone',
-                    selected: _target.targetScope == 'all_friends',
-                    accent: widget.accent,
-                    onTap: _busy
-                        ? null
-                        : () => setState(
-                            () => _target = const NudgeTarget.allFriends(),
-                          ),
-                    avatar: Icon(
-                      Icons.group_rounded,
-                      color: Colors.white,
-                      size: 24.sp,
-                    ),
+
+              _SheetDivider(),
+
+              // ── Voice message (most urgent — last, accent-tinted) ──
+              InkWell(
+                onTap: actionEnabled
+                    ? () => Navigator.of(context).pop(true)
+                    : null,
+                child: Padding(
+                  padding: EdgeInsets.symmetric(
+                    horizontal: 20.w,
+                    vertical: 14.h,
                   ),
-                  for (final friend in _friends) ...[
-                    SizedBox(width: 12.w),
-                    _NudgeRecipient(
-                      label: friend.displayName,
-                      selected: _target.targetUserId == friend.userId,
-                      accent: widget.accent,
-                      onTap: _busy
-                          ? null
-                          : () => setState(
-                              () => _target =
-                                  NudgeTarget.singleFriend(friend.userId),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.mic_none_rounded,
+                        color: actionEnabled ? accent : Colors.white24,
+                        size: 20.sp,
+                      ),
+                      SizedBox(width: 12.w),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Voice message',
+                              style: TextStyle(
+                                color: actionEnabled
+                                    ? Colors.white
+                                    : Colors.white24,
+                                fontSize: 14.sp,
+                                fontWeight: FontWeight.w700,
+                              ),
                             ),
-                      avatar: ProfileAvatar(
-                        profilePhotoUrl: friend.profilePhotoUrl,
-                        profilePhotoBase64: friend.profilePhotoBase64,
-                        radius: 24.r,
-                        fallback: Text(
-                          friend.displayName.trim().isEmpty
-                              ? '?'
-                              : String.fromCharCode(
-                                  friend.displayName.trim().runes.first,
-                                ).toUpperCase(),
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 17.sp,
-                            fontWeight: FontWeight.w700,
-                          ),
+                            Text(
+                              'Up to 6 sec',
+                              style: TextStyle(
+                                color: actionEnabled
+                                    ? accent.withValues(alpha: 0.55)
+                                    : Colors.white12,
+                                fontSize: 11.sp,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-            SizedBox(height: 18.h),
-            _QuickRingCard(
-              accent: widget.accent,
-              enabled: actionEnabled,
-              busy: _busy,
-              onSelected: _sendRing,
-            ),
-            SizedBox(height: 12.h),
-            Row(
-              children: [
-                Expanded(
-                  child: _NudgeModeButton(
-                    icon: Icons.notifications_none_rounded,
-                    label: 'Push',
-                    detail: 'Quick alert',
-                    enabled: actionEnabled,
-                    onTap: _sendPush,
+                      Icon(
+                        Icons.arrow_forward_rounded,
+                        color: actionEnabled
+                            ? accent.withValues(alpha: 0.5)
+                            : Colors.white12,
+                        size: 16.sp,
+                      ),
+                    ],
                   ),
                 ),
-                SizedBox(width: 10.w),
-                Expanded(
-                  child: _NudgeModeButton(
-                    icon: Icons.mic_none_rounded,
-                    label: 'Voice',
-                    detail: 'Up to 6 sec',
-                    enabled: actionEnabled,
-                    onTap: () => Navigator.of(context).pop(true),
+              ),
+
+              // ── Status / no-friends message ──
+              if (_friends.isEmpty || _message != null) ...[
+                Padding(
+                  padding: EdgeInsets.fromLTRB(20.w, 4.h, 20.w, 0),
+                  child: _NudgeStatus(
+                    message: _friends.isEmpty
+                        ? 'Invite a friend before sending a nudge.'
+                        : _message!,
+                    isError: _friends.isEmpty || _messageIsError,
                   ),
                 ),
               ],
-            ),
-            if (_friends.isEmpty) ...[
-              SizedBox(height: 12.h),
-              const _NudgeStatus(
-                message: 'Invite a friend before sending a nudge.',
-                isError: true,
-              ),
-            ] else if (_message != null) ...[
-              SizedBox(height: 12.h),
-              _NudgeStatus(
-                message: _message!,
-                isError: _messageIsError,
-              ),
+
+              SizedBox(height: 28.h),
             ],
-          ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// Thin sheet section divider
+class _SheetDivider extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Divider(
+      color: Colors.white.withValues(alpha: 0.06),
+      height: 1,
+      indent: 20.w,
+      endIndent: 20.w,
+    );
+  }
+}
+
+// Compact ring duration chip
+class _RingChip extends StatelessWidget {
+  const _RingChip({
+    required this.seconds,
+    required this.accent,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  final int seconds;
+  final Color accent;
+  final bool enabled;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: enabled
+          ? accent.withValues(alpha: 0.12)
+          : Colors.white.withValues(alpha: 0.04),
+      borderRadius: BorderRadius.circular(10.r),
+      child: InkWell(
+        onTap: enabled ? onTap : null,
+        borderRadius: BorderRadius.circular(10.r),
+        child: Padding(
+          padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 6.h),
+          child: Text(
+            '${seconds}s',
+            style: TextStyle(
+              color: enabled ? accent : Colors.white24,
+              fontSize: 12.sp,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
         ),
       ),
     );
@@ -353,22 +533,22 @@ class _NudgeRecipient extends StatelessWidget {
         onTap: onTap,
         borderRadius: BorderRadius.circular(18.r),
         child: SizedBox(
-          width: 62.w,
+          width: 60.w,
           child: Column(
             children: [
               AnimatedContainer(
                 duration: const Duration(milliseconds: 160),
-                padding: EdgeInsets.all(3.r),
+                padding: EdgeInsets.all(2.r),
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: const Color(0xff242424),
+                  color: const Color(0xff1e1e1e),
                   border: Border.all(
-                    color: selected ? accent : Colors.white12,
-                    width: selected ? 2 : 1,
+                    color: selected ? accent : Colors.transparent,
+                    width: 2,
                   ),
                 ),
                 child: ClipOval(
-                  child: SizedBox(width: 48.r, height: 48.r, child: avatar),
+                  child: SizedBox(width: 46.r, height: 46.r, child: avatar),
                 ),
               ),
               SizedBox(height: 5.h),
@@ -380,194 +560,9 @@ class _NudgeRecipient extends StatelessWidget {
                 style: TextStyle(
                   color: selected ? Colors.white : Colors.white54,
                   fontSize: 10.sp,
-                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                  fontWeight:
+                      selected ? FontWeight.w700 : FontWeight.w500,
                 ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _QuickRingCard extends StatelessWidget {
-  const _QuickRingCard({
-    required this.accent,
-    required this.enabled,
-    required this.busy,
-    required this.onSelected,
-  });
-
-  final Color accent;
-  final bool enabled;
-  final bool busy;
-  final ValueChanged<int> onSelected;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: EdgeInsets.all(14.r),
-      decoration: BoxDecoration(
-        color: const Color(0xff1b1b1b),
-        borderRadius: BorderRadius.circular(20.r),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.09)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(Icons.vibration_rounded, color: accent, size: 19.sp),
-              SizedBox(width: 8.w),
-              Text(
-                'Quick ring',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 14.sp,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const Spacer(),
-              if (busy)
-                SizedBox(
-                  width: 16.r,
-                  height: 16.r,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: accent,
-                  ),
-                )
-              else
-                Text(
-                  'Choose duration',
-                  style: TextStyle(color: Colors.white38, fontSize: 10.sp),
-                ),
-            ],
-          ),
-          SizedBox(height: 12.h),
-          Row(
-            children: [
-              for (final seconds in const [3, 5, 10]) ...[
-                if (seconds != 3) SizedBox(width: 8.w),
-                Expanded(
-                  child: Material(
-                    color: enabled
-                        ? accent.withValues(alpha: 0.14)
-                        : Colors.white.withValues(alpha: 0.04),
-                    borderRadius: BorderRadius.circular(14.r),
-                    child: InkWell(
-                      onTap: enabled ? () => onSelected(seconds) : null,
-                      borderRadius: BorderRadius.circular(14.r),
-                      child: Container(
-                        height: 50.h,
-                        alignment: Alignment.center,
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(14.r),
-                          border: Border.all(
-                            color: enabled
-                                ? accent.withValues(alpha: 0.34)
-                                : Colors.white10,
-                          ),
-                        ),
-                        child: Text.rich(
-                          TextSpan(
-                            text: '$seconds',
-                            style: TextStyle(
-                              color: enabled ? Colors.white : Colors.white24,
-                              fontSize: 18.sp,
-                              fontWeight: FontWeight.w800,
-                            ),
-                            children: [
-                              TextSpan(
-                                text: ' sec',
-                                style: TextStyle(
-                                  color: enabled
-                                      ? Colors.white54
-                                      : Colors.white24,
-                                  fontSize: 10.sp,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _NudgeModeButton extends StatelessWidget {
-  const _NudgeModeButton({
-    required this.icon,
-    required this.label,
-    required this.detail,
-    required this.enabled,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final String label;
-  final String detail;
-  final bool enabled;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: const Color(0xff1b1b1b),
-      borderRadius: BorderRadius.circular(18.r),
-      child: InkWell(
-        onTap: enabled ? onTap : null,
-        borderRadius: BorderRadius.circular(18.r),
-        child: Container(
-          padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 13.h),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(18.r),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.09)),
-          ),
-          child: Row(
-            children: [
-              Icon(
-                icon,
-                color: enabled ? Colors.white : Colors.white24,
-                size: 21.sp,
-              ),
-              SizedBox(width: 9.w),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      label,
-                      style: TextStyle(
-                        color: enabled ? Colors.white : Colors.white24,
-                        fontSize: 13.sp,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    Text(
-                      detail,
-                      style: TextStyle(
-                        color: enabled ? Colors.white38 : Colors.white24,
-                        fontSize: 9.sp,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Icon(
-                Icons.chevron_right_rounded,
-                color: enabled ? Colors.white30 : Colors.white12,
-                size: 18.sp,
               ),
             ],
           ),
@@ -596,7 +591,9 @@ class _NudgeStatus extends StatelessWidget {
       child: Row(
         children: [
           Icon(
-            isError ? Icons.error_outline_rounded : Icons.check_circle_outline,
+            isError
+                ? Icons.error_outline_rounded
+                : Icons.check_circle_outline,
             color: color,
             size: 17.sp,
           ),
@@ -663,7 +660,10 @@ class _NudgeScreenState extends State<NudgeScreen> {
       .toList(growable: false);
 
   bool get _canSend =>
-      _friends.isNotEmpty && !_busy && !_startingRecording && !_finishingRecording;
+      _friends.isNotEmpty &&
+      !_busy &&
+      !_startingRecording &&
+      !_finishingRecording;
 
   @override
   void dispose() {
@@ -718,7 +718,9 @@ class _NudgeScreenState extends State<NudgeScreen> {
     _startingRecording = true;
     try {
       if (!await _recorder.hasPermission()) {
-        if (mounted) setState(() => _message = 'Microphone permission is required.');
+        if (mounted) {
+          setState(() => _message = 'Microphone permission is required.');
+        }
         return;
       }
       final file = File(
@@ -756,7 +758,7 @@ class _NudgeScreenState extends State<NudgeScreen> {
         setState(() {
           _recording = true;
           _elapsed = Duration.zero;
-          _message = 'Recording… release to send';
+          _message = 'Recording\u2026 release to send';
         });
       }
       if (!_pointerHeld) {
@@ -782,7 +784,7 @@ class _NudgeScreenState extends State<NudgeScreen> {
       setState(() {
         _recording = false;
         _busy = send;
-        _message = send ? 'Sending voice nudge…' : null;
+        _message = send ? 'Sending voice nudge\u2026' : null;
       });
     }
 
@@ -791,7 +793,9 @@ class _NudgeScreenState extends State<NudgeScreen> {
       path = await _recorder.stop();
       if (!send || path == null) return;
       if (durationMs < 250) {
-        if (mounted) setState(() => _message = 'Hold a little longer to record.');
+        if (mounted) {
+          setState(() => _message = 'Hold a little longer to record.');
+        }
         return;
       }
       final file = File(path);
@@ -836,18 +840,19 @@ class _NudgeScreenState extends State<NudgeScreen> {
     if (text.contains('voice_nudge_too_large')) {
       return 'Recording was too large. Try again.';
     }
-    return 'Couldn’t send the nudge. Check your connection.';
+    return 'Couldn\u2019t send the nudge. Check your connection.';
   }
 
   @override
   Widget build(BuildContext context) {
-    final progress = (_elapsed.inMilliseconds / _maxVoiceDuration.inMilliseconds)
-        .clamp(0.0, 1.0);
+    final progress =
+        (_elapsed.inMilliseconds / _maxVoiceDuration.inMilliseconds)
+            .clamp(0.0, 1.0);
     return Scaffold(
       backgroundColor: const Color(0xff0d0d0d),
       appBar: AppBar(
         backgroundColor: Colors.transparent,
-        title: Text('Nudge · ${widget.group.name}'),
+        title: Text('Nudge \u00b7 ${widget.group.name}'),
       ),
       body: SafeArea(
         child: ListView(
@@ -900,7 +905,8 @@ class _NudgeScreenState extends State<NudgeScreen> {
             _NudgeCard(
               icon: Icons.ring_volume_outlined,
               title: 'Ring nudge',
-              subtitle: 'Plays while the Android phone is locked or the app process is closed.',
+              subtitle:
+                  'Plays while the Android phone is locked or the app process is closed.',
               child: Wrap(
                 spacing: 10,
                 children: [
@@ -916,7 +922,8 @@ class _NudgeScreenState extends State<NudgeScreen> {
             _NudgeCard(
               icon: Icons.mic_none_rounded,
               title: 'Voice nudge',
-              subtitle: 'Press and hold. Your recording is capped at 6 seconds and sent on release.',
+              subtitle:
+                  'Press and hold. Your recording is capped at 6 seconds and sent on release.',
               child: Center(
                 child: Listener(
                   onPointerDown: (_) {
@@ -939,10 +946,17 @@ class _NudgeScreenState extends State<NudgeScreen> {
                     width: 104,
                     height: 104,
                     decoration: BoxDecoration(
-                      color: _recording ? widget.accent : const Color(0xff202020),
+                      color: _recording
+                          ? widget.accent
+                          : const Color(0xff202020),
                       shape: BoxShape.circle,
                       boxShadow: _recording
-                          ? [BoxShadow(color: widget.accent.withValues(alpha: 0.35), blurRadius: 26)]
+                          ? [
+                              BoxShadow(
+                                color: widget.accent.withValues(alpha: 0.35),
+                                blurRadius: 26,
+                              ),
+                            ]
                           : null,
                     ),
                     child: Stack(
@@ -958,7 +972,9 @@ class _NudgeScreenState extends State<NudgeScreen> {
                           ),
                         ),
                         Icon(
-                          _recording ? Icons.mic_rounded : Icons.mic_none_rounded,
+                          _recording
+                              ? Icons.mic_rounded
+                              : Icons.mic_none_rounded,
                           size: 42,
                           color: _recording ? Colors.black : Colors.white,
                         ),
