@@ -11,6 +11,7 @@ class UserDeviceRecord {
     required this.createdAt,
     required this.updatedAt,
     required this.lastSeenAt,
+    this.fcmToken,
   });
 
   final String deviceId;
@@ -24,6 +25,7 @@ class UserDeviceRecord {
   final int createdAt;
   final int updatedAt;
   final int lastSeenAt;
+  final String? fcmToken;
 
   Map<String, Object?> toJson() {
     return {
@@ -37,6 +39,7 @@ class UserDeviceRecord {
       'createdAt': createdAt,
       'updatedAt': updatedAt,
       'lastSeenAt': lastSeenAt,
+      if (fcmToken != null) 'fcmToken': fcmToken,
     };
   }
 }

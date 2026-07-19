@@ -63,7 +63,10 @@ class _FloatingReactionBubbleState extends State<_FloatingReactionBubble>
 
   late final Animation<double> _scale = TweenSequence<double>([
     TweenSequenceItem(
-      tween: Tween(begin: 0.86, end: 1.05).chain(CurveTween(curve: Curves.easeOutBack)),
+      tween: Tween(
+        begin: 0.86,
+        end: 1.05,
+      ).chain(CurveTween(curve: Curves.easeOutBack)),
       weight: 18,
     ),
     TweenSequenceItem(tween: Tween(begin: 1.05, end: 1), weight: 12),
@@ -89,49 +92,79 @@ class _FloatingReactionBubbleState extends State<_FloatingReactionBubble>
         position: _slide,
         child: ScaleTransition(
           scale: _scale,
-          child: Container(
-            constraints: BoxConstraints(maxWidth: 280.w),
-            padding: EdgeInsets.symmetric(horizontal: 18.w, vertical: 14.h),
-            decoration: BoxDecoration(
-              color: const Color.fromRGBO(0, 0, 0, 0.62),
-              borderRadius: BorderRadius.circular(22.r),
-              border: Border.all(
-                color: const Color.fromRGBO(255, 255, 255, 0.16),
-              ),
-              boxShadow: const [
-                BoxShadow(
-                  color: Color(0x66000000),
-                  blurRadius: 24,
-                  offset: Offset(0, 10),
+          child: reaction.isEmojiOnly
+              ? Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      reaction.text,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 48.sp, height: 1.05),
+                    ),
+                    SizedBox(height: 4.h),
+                    Text(
+                      name,
+                      style: TextStyle(
+                        color: Colors.white70,
+                        fontSize: 11.sp,
+                        fontWeight: FontWeight.w600,
+                        shadows: const [
+                          Shadow(color: Colors.black, blurRadius: 8),
+                        ],
+                      ),
+                    ),
+                  ],
+                )
+              : Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Container(
+                      constraints: BoxConstraints(maxWidth: 280.w),
+                      padding: EdgeInsets.symmetric(
+                        horizontal: 15.w,
+                        vertical: 10.h,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color.fromRGBO(25, 25, 25, 0.94),
+                        borderRadius: BorderRadius.only(
+                          topLeft: Radius.circular(18.r),
+                          topRight: Radius.circular(18.r),
+                          bottomLeft: Radius.circular(18.r),
+                          bottomRight: Radius.circular(5.r),
+                        ),
+                        boxShadow: const [
+                          BoxShadow(
+                            color: Color(0x55000000),
+                            blurRadius: 18,
+                            offset: Offset(0, 8),
+                          ),
+                        ],
+                      ),
+                      child: Text(
+                        reaction.text,
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 17.sp,
+                          fontWeight: FontWeight.w600,
+                          height: 1.3,
+                        ),
+                      ),
+                    ),
+                    SizedBox(height: 4.h),
+                    Padding(
+                      padding: EdgeInsets.only(right: 5.w),
+                      child: Text(
+                        name,
+                        style: TextStyle(
+                          color: Colors.white60,
+                          fontSize: 11.sp,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-              ],
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  reaction.text,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: reaction.isEmojiOnly ? 40.sp : 18.sp,
-                    fontWeight: FontWeight.w700,
-                    height: 1.2,
-                  ),
-                ),
-                SizedBox(height: 6.h),
-                Text(
-                  name,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Colors.white60,
-                    fontSize: 12.sp,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-            ),
-          ),
         ),
       ),
     );

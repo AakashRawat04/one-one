@@ -1,0 +1,11 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Voice nudges and profile media are brokered by trusted services. Client
+    // SDK access is intentionally closed; Firebase Admin bypasses these rules.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

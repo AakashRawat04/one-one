@@ -1,17 +1,20 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:device_info_plus/device_info_plus.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_database/firebase_database.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../../../app/accent_theme.dart';
 import '../../../core/firebase/app_database.dart';
 import '../../../core/storage/profile_photo_storage.dart';
+import '../../nudges/data/android_voice_nudge_bridge.dart';
 import '../models/app_user_profile.dart';
 import '../models/identity_session.dart';
 import '../models/user_device_record.dart';
@@ -37,11 +40,21 @@ class IdentityRepository {
   final DeviceIdentityStore _deviceIdentityStore;
   final ProfilePhotoStorage _profilePhotoStorage;
   IdentitySession? _cachedSession;
+  final ValueNotifier<IdentitySession?> _sessionNotifier = ValueNotifier(null);
+  bool _disposed = false;
+
+  ValueListenable<IdentitySession?> get sessionListenable => _sessionNotifier;
+  IdentitySession? get currentSession {
+    if (_disposed) return _cachedSession;
+    return _sessionNotifier.value;
+  }
+
+  static Future<void>? _googleSignInInitialization;
 
   Future<IdentitySession> ensureIdentity() async {
     final firebaseUser = await _requiredStartupStep(
-      _ensureAnonymousUser(),
-      'Firebase anonymous sign-in',
+      _requireGoogleUser(),
+      'Google authentication',
     );
     final now = _nowSeconds();
     final localDevice = await _requiredStartupStep(
@@ -53,12 +66,19 @@ class IdentityRepository {
       fallback: 'unknown',
     );
     final permissions = await _readPermissionDiagnostics();
+    final fcmToken = Platform.isAndroid
+        ? await _optionalStartupValue(AndroidVoiceNudgeBridge().getFcmToken())
+        : null;
+    debugPrint(
+      '[OneOneFCM][DART-03] Identity startup registrationAvailable='
+      '${fcmToken != null}',
+    );
 
     final localSession = IdentitySession(
       user: AppUserProfile(
         userId: firebaseUser.uid,
-        displayName: _defaultDisplayName(firebaseUser.uid),
-        authProvider: 'anonymous',
+        displayName: _defaultDisplayName(firebaseUser),
+        authProvider: _authProviderFor(firebaseUser),
         accountState: 'active',
         createdAt: now,
         updatedAt: now,
@@ -79,24 +99,33 @@ class IdentityRepository {
         createdAt: now,
         updatedAt: now,
         lastSeenAt: now,
+        fcmToken: fcmToken,
       ),
       settings: UserSettingsRecord.defaults(now),
     );
 
-    _cachedSession = localSession;
+    _publishSession(localSession);
     final syncedSession = await _optionalStartupValue(
       _syncRemoteIdentityState(
         userId: firebaseUser.uid,
         localDevice: localDevice,
         appVersion: appVersion,
         permissions: permissions,
+        fcmToken: fcmToken,
         now: now,
       ),
     );
 
     if (syncedSession != null) {
+      debugPrint(
+        '[OneOneFCM][DART-05] Device registration synchronized to Firebase',
+      );
       return syncedSession;
     }
+
+    debugPrint(
+      '[OneOneFCM][DART-W1] Initial device sync did not complete; retry queued',
+    );
 
     unawaited(
       _syncRemoteIdentityState(
@@ -104,6 +133,7 @@ class IdentityRepository {
         localDevice: localDevice,
         appVersion: appVersion,
         permissions: permissions,
+        fcmToken: fcmToken,
         now: now,
       ),
     );
@@ -140,7 +170,7 @@ class IdentityRepository {
         device: session.device,
         settings: session.settings,
       );
-      _cachedSession = updatedSession;
+      _publishSession(updatedSession);
       return updatedSession;
     }
 
@@ -182,7 +212,7 @@ class IdentityRepository {
         device: session.device,
         settings: settings,
       );
-      _cachedSession = updatedSession;
+      _publishSession(updatedSession);
       return updatedSession;
     }
 
@@ -195,11 +225,13 @@ class IdentityRepository {
       throw StateError('Cannot update profile photo before sign-in.');
     }
 
-    final photoUrl = await _profilePhotoStorage.uploadProfilePhoto(
+    final previousPhotoUrl = _cachedSession?.user.profilePhotoUrl;
+    final uploadedPhotoUrl = await _profilePhotoStorage.uploadProfilePhoto(
       userId: user.uid,
       imageBytes: imageBytes,
     );
     final now = _nowSeconds();
+    final photoUrl = _withCacheVersion(uploadedPhotoUrl, now);
     await _database.ref('users/${user.uid}').update({
       'profilePhotoUrl': photoUrl,
       'profilePhotoBase64': null,
@@ -219,32 +251,128 @@ class IdentityRepository {
         device: session.device,
         settings: session.settings,
       );
-      _cachedSession = updatedSession;
+      await _evictProfilePhoto(previousPhotoUrl);
+      await _evictProfilePhoto(uploadedPhotoUrl);
+      _publishSession(updatedSession);
       return updatedSession;
     }
 
     return ensureIdentity();
   }
 
-  void dispose() {}
+  Future<User> signInWithGoogle() async {
+    _googleSignInInitialization ??= GoogleSignIn.instance.initialize();
+    await _googleSignInInitialization;
 
-  Future<User> _ensureAnonymousUser() async {
+    final googleAccount = await GoogleSignIn.instance.authenticate();
+    final idToken = googleAccount.authentication.idToken;
+    if (idToken == null || idToken.isEmpty) {
+      throw StateError('Google sign-in did not return an ID token.');
+    }
+
+    final credential = GoogleAuthProvider.credential(idToken: idToken);
     final currentUser = _auth.currentUser;
-    if (currentUser != null) {
-      return currentUser;
+    UserCredential result;
+    if (currentUser?.isAnonymous == true) {
+      try {
+        result = await currentUser!.linkWithCredential(credential);
+      } on FirebaseAuthException catch (error) {
+        if (error.code == 'credential-already-in-use' ||
+            error.code == 'account-exists-with-different-credential') {
+          result = await _auth.signInWithCredential(credential);
+        } else {
+          rethrow;
+        }
+      }
+    } else {
+      result = await _auth.signInWithCredential(credential);
     }
 
-    final credential = await _auth.signInAnonymously();
-    final user = credential.user;
-
+    final user = result.user;
     if (user == null) {
-      throw StateError('Firebase anonymous sign-in returned no user.');
+      throw StateError('Firebase Google sign-in returned no user.');
     }
-
+    if (_cachedSession?.userId != user.uid) {
+      _cachedSession = null;
+      _sessionNotifier.value = null;
+    }
     return user;
   }
 
-  Future<AppUserProfile> _upsertUserProfile(String userId, int now) async {
+  Future<void> signOut() async {
+    try {
+      await GoogleSignIn.instance.signOut();
+    } finally {
+      await _auth.signOut();
+      _clearSession();
+    }
+  }
+
+  Future<void> deleteAccount() async {
+    final user = _auth.currentUser;
+    if (user == null || user.isAnonymous) {
+      throw StateError('No Google account is signed in.');
+    }
+
+    final credential = await _googleCredential();
+    await user.reauthenticateWithCredential(credential);
+
+    await _database.ref().update({
+      'users/${user.uid}': null,
+      'userDevices/${user.uid}': null,
+      'userSettings/${user.uid}': null,
+    });
+    await user.delete();
+    try {
+      await GoogleSignIn.instance.disconnect();
+    } catch (_) {
+      await GoogleSignIn.instance.signOut();
+    }
+    _clearSession();
+  }
+
+  void dispose() {
+    _disposed = true;
+    _cachedSession = null;
+    // Do not call _sessionNotifier.dispose() here — this repository is
+    // referenced by screens that may outlive the StartupGateScreen that owns
+    // it (e.g. SettingsScreen opened via push uses the same listenable).
+    // The notifier will be garbage-collected when the app is torn down.
+    _sessionNotifier.value = null;
+  }
+
+  bool get isDisposed => _disposed;
+
+  Future<User> _requireGoogleUser() async {
+    final currentUser = _auth.currentUser;
+    if (currentUser != null &&
+        !currentUser.isAnonymous &&
+        currentUser.providerData.any(
+          (provider) => provider.providerId == 'google.com',
+        )) {
+      return currentUser;
+    }
+    throw StateError('Google sign-in is required before setup.');
+  }
+
+  Future<AuthCredential> _googleCredential() async {
+    _googleSignInInitialization ??= GoogleSignIn.instance.initialize();
+    await _googleSignInInitialization;
+    final account = await GoogleSignIn.instance.authenticate();
+    final idToken = account.authentication.idToken;
+    if (idToken == null || idToken.isEmpty) {
+      throw StateError('Google sign-in did not return an ID token.');
+    }
+    return GoogleAuthProvider.credential(idToken: idToken);
+  }
+
+  void _clearSession() {
+    _cachedSession = null;
+    if (!_disposed) _sessionNotifier.value = null;
+  }
+
+  Future<AppUserProfile> _upsertUserProfile(User firebaseUser, int now) async {
+    final userId = firebaseUser.uid;
     final ref = _database.ref('users/$userId');
     final snapshot = await ref.get();
 
@@ -253,15 +381,24 @@ class IdentityRepository {
         userId,
         snapshot.value! as Map<Object?, Object?>,
       );
-      final updated = existing.copyWith(updatedAt: now, lastSeenAt: now);
-      await ref.update({'updatedAt': now, 'lastSeenAt': now});
+      final authProvider = _authProviderFor(firebaseUser);
+      final updated = existing.copyWith(
+        authProvider: authProvider,
+        updatedAt: now,
+        lastSeenAt: now,
+      );
+      await ref.update({
+        'authProvider': authProvider,
+        'updatedAt': now,
+        'lastSeenAt': now,
+      });
       return updated;
     }
 
     final profile = AppUserProfile(
       userId: userId,
-      displayName: _defaultDisplayName(userId),
-      authProvider: 'anonymous',
+      displayName: _defaultDisplayName(firebaseUser),
+      authProvider: _authProviderFor(firebaseUser),
       accountState: 'active',
       createdAt: now,
       updatedAt: now,
@@ -291,15 +428,18 @@ class IdentityRepository {
     required LocalDeviceIdentity localDevice,
     required String appVersion,
     required _PermissionDiagnostics permissions,
+    required String? fcmToken,
     required int now,
   }) async {
     final ref = _database.ref('userDevices/$userId/${localDevice.deviceId}');
     final snapshot = await ref.get();
     int createdAt = now;
+    String? resolvedFcmToken = fcmToken;
 
     if (snapshot.exists && snapshot.value is Map<Object?, Object?>) {
       final data = snapshot.value! as Map<Object?, Object?>;
       createdAt = _readInt(data['createdAt'], fallback: now);
+      resolvedFcmToken ??= data['fcmToken']?.toString();
     }
 
     final device = UserDeviceRecord(
@@ -314,9 +454,17 @@ class IdentityRepository {
       createdAt: createdAt,
       updatedAt: now,
       lastSeenAt: now,
+      fcmToken: resolvedFcmToken,
     );
 
     await ref.set(device.toJson());
+    debugPrint(
+      '[OneOneFCM][DART-04] userDevices record written '
+      'userSuffix=${_diagnosticSuffix(userId)} '
+      'deviceSuffix=${_diagnosticSuffix(localDevice.deviceId)} '
+      'registrationAvailable=${resolvedFcmToken != null} '
+      'registrationSource=${fcmToken != null ? 'current' : 'existing_or_missing'}',
+    );
     return device;
   }
 
@@ -325,16 +473,20 @@ class IdentityRepository {
     required LocalDeviceIdentity localDevice,
     required String appVersion,
     required _PermissionDiagnostics permissions,
+    required String? fcmToken,
     required int now,
   }) async {
     try {
-      final user = await _upsertUserProfile(userId, now);
+      final firebaseUser = _auth.currentUser;
+      if (firebaseUser == null || firebaseUser.uid != userId) return null;
+      final user = await _upsertUserProfile(firebaseUser, now);
       final settings = await _ensureUserSettings(userId, now);
       final device = await _upsertUserDevice(
         userId: userId,
         localDevice: localDevice,
         appVersion: appVersion,
         permissions: permissions,
+        fcmToken: fcmToken,
         now: now,
       );
 
@@ -343,9 +495,13 @@ class IdentityRepository {
         device: device,
         settings: settings,
       );
-      _cachedSession = session;
+      _publishSession(session);
       return session;
-    } catch (_) {
+    } catch (error) {
+      debugPrint(
+        '[OneOneFCM][DART-E4] Firebase device sync failed '
+        '${error.runtimeType}: $error',
+      );
       // Keep startup responsive even if the database sync is slow or fails.
       return null;
     }
@@ -398,9 +554,48 @@ class IdentityRepository {
     );
   }
 
-  String _defaultDisplayName(String userId) {
+  String _defaultDisplayName(User user) {
+    final providerName = user.displayName?.trim();
+    if (providerName != null && providerName.isNotEmpty) return providerName;
+    final userId = user.uid;
     final suffix = userId.length >= 4 ? userId.substring(0, 4) : userId;
     return 'Friend $suffix';
+  }
+
+  String _authProviderFor(User user) {
+    if (user.isAnonymous) return 'anonymous';
+    if (user.providerData.any(
+      (provider) => provider.providerId == 'google.com',
+    )) {
+      return 'google';
+    }
+    return user.providerData.firstOrNull?.providerId ?? 'firebase';
+  }
+
+  void _publishSession(IdentitySession session) {
+    _cachedSession = session;
+    if (!_disposed) {
+      _sessionNotifier.value = session;
+    }
+  }
+
+  Future<void> _evictProfilePhoto(String? url) async {
+    final cleanUrl = url?.trim();
+    if (cleanUrl == null || cleanUrl.isEmpty) return;
+    try {
+      await CachedNetworkImage.evictFromCache(cleanUrl);
+    } catch (_) {
+      // Cache eviction is best effort; the versioned cache key still forces a refresh.
+    }
+  }
+
+  String _withCacheVersion(String url, int version) {
+    final uri = Uri.parse(url);
+    return uri
+        .replace(
+          queryParameters: {...uri.queryParameters, 'one_one_v': '$version'},
+        )
+        .toString();
   }
 
   int _nowSeconds() {
@@ -466,3 +661,6 @@ int _readInt(Object? value, {required int fallback}) {
   if (value is num) return value.toInt();
   return int.tryParse(value?.toString() ?? '') ?? fallback;
 }
+
+String _diagnosticSuffix(String value) =>
+    value.length <= 6 ? value : value.substring(value.length - 6);

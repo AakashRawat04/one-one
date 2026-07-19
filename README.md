@@ -32,9 +32,12 @@ flutter run \
   --dart-define=ONE_ONE_FIREBASE_DATABASE_URL=https://oneone-3adb5-default-rtdb.asia-southeast1.firebasedatabase.app
 ```
 
-Current state: Phase 1 audio spike, Phase 3 Firebase anonymous identity/device registration, Phase 4 groups/invites, Phase 5 online/away token/availability flow, and Phase 7 push-to-talk.
+Current state: Phase 1 audio spike, Phase 3 Firebase anonymous identity/device registration, Phase 4 groups/invites, Phase 5 online/away token/availability flow, Phase 7 push-to-talk, subscriptions, and Android nudge delivery.
 
-FCM push notifications are disabled in the current Flutter build. Nudge and friend-live push alerts are not part of the active APK path.
+Android FCM registration is active. Push, 3/5/10-second ring, and six-second
+voice nudges are available from the home-screen nudge button. Ring and voice
+nudges use a native foreground playback service so Flutter does not need to be
+running. See `requirements/android-nudge-delivery.md` before deployment.
 
 ## Backend
 

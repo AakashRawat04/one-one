@@ -145,7 +145,6 @@ class _WaitingForGroupMembersScreenState
         context,
         session: widget.session,
         identityRepository: widget.identityRepository,
-        onSessionChanged: (_) {},
       ),
     );
   }

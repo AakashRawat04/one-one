@@ -1,5 +1,9 @@
 import { getRealtimeDatabase } from "../firebase/database.js";
-import { sendPushToTokens } from "../firebase/messaging.js";
+import {
+  isPermanentMessagingTargetError,
+  sendPushToTokens
+} from "../firebase/messaging.js";
+import { config } from "../config.js";
 import {
   requireActiveGroup,
   requireActiveGroupMember,
@@ -7,6 +11,7 @@ import {
   requireActiveUserDevice
 } from "../groups/groupService.js";
 import { HttpError } from "../http/httpError.js";
+import { logger } from "../logger.js";
 
 export type FriendLiveInput = {
   groupId: string;
@@ -30,9 +35,6 @@ type RecipientDevice = {
 };
 
 const friendLiveDedupeSeconds = 60;
-const sameRecipientNudgeSeconds = 60;
-const senderGroupNudgeLimitSeconds = 10 * 60;
-const senderGroupNudgeLimit = 5;
 
 export async function sendFriendLiveNotification(input: FriendLiveInput) {
   const db = getRealtimeDatabase();
@@ -190,27 +192,68 @@ export async function sendNudgeNotification(input: NudgeInput) {
 }
 
 async function enforceNudgeRateLimits(input: NudgeInput, now: number) {
-  const recentGroupNudges = await listRecentNotificationEvents({
-    groupId: input.groupId,
-    senderUserId: input.senderUserId,
-    eventType: "nudge",
-    since: now - senderGroupNudgeLimitSeconds
-  });
+  const snapshot = await getRealtimeDatabase().ref(`notificationEvents/${input.groupId}`).get();
+  const recentGroupNudges = !snapshot.exists() || !isRecord(snapshot.val())
+    ? []
+    : Object.values(snapshot.val() as Record<string, unknown>)
+        .filter(isNotificationEvent)
+        .filter((event) => {
+          return (
+            event.senderUserId === input.senderUserId &&
+            ["nudge", "ring_nudge", "voice_nudge"].includes(event.eventType) &&
+            event.createdAt >= now - config.NUDGE_RATE_LIMIT_WINDOW_SECONDS
+          );
+        });
 
-  if (recentGroupNudges.length >= senderGroupNudgeLimit) {
-    throw new HttpError(429, "nudge_rate_limited", "Too many nudges sent in this group.");
+  if (recentGroupNudges.length >= config.NUDGE_RATE_LIMIT_MAX_PER_GROUP) {
+    const oldestCreatedAt = Math.min(...recentGroupNudges.map((event) => event.createdAt));
+    const retryAfterSeconds = Math.max(
+      1,
+      oldestCreatedAt + config.NUDGE_RATE_LIMIT_WINDOW_SECONDS - now
+    );
+    logger.warn(
+      {
+        checkpoint: "NUDGE-BE-W1",
+        reason: "group_limit",
+        recentCount: recentGroupNudges.length,
+        configuredLimit: config.NUDGE_RATE_LIMIT_MAX_PER_GROUP,
+        retryAfterSeconds
+      },
+      "nudge request rate limited before FCM send"
+    );
+    throw new HttpError(
+      429,
+      "nudge_rate_limited",
+      `Nudge limit reached. Try again in ${retryAfterSeconds} seconds.`
+    );
   }
 
-  if (input.targetScope === "single_friend" && input.targetUserId) {
+  if (
+    config.NUDGE_RECIPIENT_COOLDOWN_SECONDS > 0 &&
+    input.targetScope === "single_friend" &&
+    input.targetUserId
+  ) {
     const recentSameRecipient = recentGroupNudges.some((event) => {
       return (
-        event.createdAt >= now - sameRecipientNudgeSeconds &&
+        event.createdAt >= now - config.NUDGE_RECIPIENT_COOLDOWN_SECONDS &&
         event.targetUserIds.includes(input.targetUserId!)
       );
     });
 
     if (recentSameRecipient) {
-      throw new HttpError(429, "nudge_rate_limited", "This friend was nudged too recently.");
+      logger.warn(
+        {
+          checkpoint: "NUDGE-BE-W2",
+          reason: "recipient_cooldown",
+          retryAfterSeconds: config.NUDGE_RECIPIENT_COOLDOWN_SECONDS
+        },
+        "nudge request rate limited before FCM send"
+      );
+      throw new HttpError(
+        429,
+        "nudge_rate_limited",
+        `Please wait ${config.NUDGE_RECIPIENT_COOLDOWN_SECONDS} seconds before nudging this friend again.`
+      );
     }
   }
 }
@@ -305,6 +348,10 @@ async function writeDeliveries(
       errorCode: response?.error ? String(response.error) : null,
       attemptedAt: now
     };
+    if (isPermanentMessagingTargetError(response?.error)) {
+      updates[`userDevices/${device.userId}/${device.deviceId}/fcmToken`] = null;
+      updates[`userDevices/${device.userId}/${device.deviceId}/registrationInvalidatedAt`] = now;
+    }
   });
 
   if (Object.keys(updates).length > 0) {

@@ -12,6 +12,15 @@ const envSchema = z.object({
   FIREBASE_CLIENT_EMAIL: z.string().email().optional(),
   FIREBASE_PRIVATE_KEY: z.string().min(1).optional(),
   FIREBASE_DATABASE_URL: z.string().url().optional(),
+  FIREBASE_STORAGE_BUCKET: z.string().min(1).optional(),
+  PUBLIC_API_BASE_URL: z
+    .string()
+    .url()
+    .default("https://one-one-xw00.onrender.com"),
+  NUDGE_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().min(10).max(3600).default(600),
+  NUDGE_RATE_LIMIT_MAX_PER_GROUP: z.coerce.number().int().min(1).max(300).default(30),
+  NUDGE_RECIPIENT_COOLDOWN_SECONDS: z.coerce.number().int().min(0).max(300).default(5),
+  SUBSCRIPTION_REDEEM_CODE_HASHES: z.string().optional(),
   CORS_ORIGINS: z.string().optional()
 });
 

@@ -114,7 +114,7 @@ const _privacySections = <_LegalSection>[
   ),
   _LegalSection(
     '2. Information we collect',
-    'We collect an anonymous account identifier, display name, optional profile picture, group membership and invite information, app settings, device and app-version identifiers, permission status, availability state, and basic service diagnostics. When you use live voice, microphone audio is transmitted to the other active members of your group.',
+    'We collect your Google-authenticated account identifier and email address, display name, optional profile picture, group membership and invite information, app settings, device and app-version identifiers, permission status, availability state, and basic service diagnostics. When you use live voice, microphone audio is transmitted to the other active members of your group.',
   ),
   _LegalSection(
     '3. How information is used',
@@ -126,7 +126,7 @@ const _privacySections = <_LegalSection>[
   ),
   _LegalSection(
     '5. Service providers',
-    'One One uses providers including Google Firebase for anonymous authentication and app data, Cloudinary for profile-picture hosting, LiveKit for real-time audio, and hosting providers for application services. These providers process information on our behalf under their own privacy and security practices.',
+    'One One uses providers including Google Firebase for authentication and app data, Cloudinary for profile-picture hosting, LiveKit for real-time audio, and hosting providers for application services. These providers process information on our behalf under their own privacy and security practices.',
   ),
   _LegalSection(
     '6. Sharing',
@@ -138,7 +138,7 @@ const _privacySections = <_LegalSection>[
   ),
   _LegalSection(
     '8. Your choices',
-    'You may change your display name, profile picture, app preferences, and device permissions. You may leave groups or stop using the app. Requests to access or delete information can be made through the support channel shown on the One One App Store listing. We may need information that identifies your app installation to complete a request.',
+    'You may change your display name, profile picture, app preferences, and device permissions. You may leave groups, log out, or delete your account from Settings. Requests to access information can be made through the support channel shown on the One One App Store listing. We may need information that identifies your app installation to complete a request.',
   ),
   _LegalSection(
     '9. Children',

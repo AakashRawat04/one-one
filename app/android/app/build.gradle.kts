@@ -41,21 +41,32 @@ android {
     }
 
     signingConfigs {
-        create("release") {
-            keyAlias = keystoreProperties["keyAlias"] as String
-            keyPassword = keystoreProperties["keyPassword"] as String
-            storeFile = keystoreProperties["storeFile"]?.let { rootProject.file(it) }
-            storePassword = keystoreProperties["storePassword"] as String
+        if (keystorePropertiesFile.exists()) {
+            create("release") {
+                keyAlias = keystoreProperties["keyAlias"] as String
+                keyPassword = keystoreProperties["keyPassword"] as String
+                storeFile = keystoreProperties["storeFile"]?.let { rootProject.file(it) }
+                storePassword = keystoreProperties["storePassword"] as String
+            }
         }
     }
 
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName("release")
+            if (keystorePropertiesFile.exists()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 }
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    implementation(platform("com.google.firebase:firebase-bom:34.15.0"))
+    implementation("com.google.firebase:firebase-installations")
+    implementation("com.google.firebase:firebase-messaging")
+    implementation("androidx.media3:media3-exoplayer:1.10.1")
 }

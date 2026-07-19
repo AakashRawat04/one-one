@@ -40,7 +40,11 @@ dependencies:
   google_fonts: ^6.3.0
   flutter_screenutil: ^5.9.3
   image_picker: ^1.1.2
+  image_cropper: ^11.0.0
+  image: ^4.5.4
   cached_network_image: ^3.4.1
+  connectivity_plus: ^7.2.0
+  google_sign_in: ^7.2.0
   http: ^1.6.0
   livekit_client: ^2.8.1
   flutter_foreground_task: ^9.2.2
@@ -50,6 +54,10 @@ dependencies:
   shared_preferences: ^2.5.5
   uuid: ^4.5.3
   audioplayers: ^6.7.1
+  record: ^6.2.1
+  purchases_flutter: ^10.4.1
+  purchases_ui_flutter: ^10.4.1
+  firebase_remote_config: ^6.5.5
 
 dev_dependencies:
   flutter_test:

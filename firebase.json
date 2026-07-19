@@ -1,5 +1,11 @@
 {
   "database": {
     "rules": "firebase/realtime-database.rules.json"
+  },
+  "storage": {
+    "rules": "firebase/storage.rules"
+  },
+  "remoteconfig": {
+    "template": "firebase/remote-config.template.json"
   }
 }

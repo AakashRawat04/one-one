@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -10,11 +9,9 @@ import '../features/identity/data/identity_repository.dart';
 import '../features/identity/models/identity_session.dart';
 import '../features/identity/ui/no_groups_screen.dart';
 import 'accent_theme.dart';
-import 'battery_optimization_screen.dart';
 import 'display_name_screen.dart';
 import 'profile_picture_screen.dart';
 import 'setup_permission_screen.dart';
-import 'startup_session_policy.dart';
 
 class StartupGateScreen extends StatefulWidget {
   const StartupGateScreen({super.key});
@@ -25,20 +22,18 @@ class StartupGateScreen extends StatefulWidget {
 
 class _StartupGateScreenState extends State<StartupGateScreen> {
   static const Duration _introDelay = Duration(seconds: 3);
-  static const Duration _introAnimationDuration = Duration(milliseconds: 450);
 
   final IdentityRepository _identityRepository = IdentityRepository();
 
-  bool _showLetsGo = false;
   bool _isLoggingIn = false;
-  bool _isExistingUser = false;
   Widget? _nextScreen;
   Timer? _introTimer;
+  String? _startupError;
 
   @override
   void initState() {
     super.initState();
-    unawaited(_prepareIntro());
+    _introTimer = Timer(_introDelay, _continueAfterLogin);
   }
 
   @override
@@ -48,32 +43,13 @@ class _StartupGateScreenState extends State<StartupGateScreen> {
     super.dispose();
   }
 
-  Future<void> _prepareIntro() async {
-    final authUser = await FirebaseAuth.instance.authStateChanges().first;
-    if (!mounted) return;
-
-    _isExistingUser = authUser != null;
-
-    _introTimer = Timer(_introDelay, () async {
-      if (!mounted) return;
-
-      final shouldResume = StartupSessionPolicy.shouldResume(
-        hadInitialFirebaseUser: _isExistingUser,
-        hasCurrentFirebaseUser: FirebaseAuth.instance.currentUser != null,
-      );
-
-      if (shouldResume) {
-        unawaited(_continueAfterLogin());
-      } else {
-        setState(() => _showLetsGo = true);
-      }
-    });
-  }
-
   Future<void> _continueAfterLogin() async {
     if (_isLoggingIn) return;
 
-    setState(() => _isLoggingIn = true);
+    setState(() {
+      _isLoggingIn = true;
+      _startupError = null;
+    });
 
     try {
       final session = await _identityRepository.ensureIdentity();
@@ -107,19 +83,14 @@ class _StartupGateScreenState extends State<StartupGateScreen> {
                   setState(() {
                     _nextScreen = SetupPermissionScreen(
                       onComplete: () async {
+                        final readySession = await _identityRepository
+                            .ensureIdentity();
+                        await _markSetupComplete(readySession.userId);
                         if (!mounted) return;
                         setState(() {
-                          _nextScreen = BatteryOptimizationScreen(
-                            onComplete: () async {
-                              await _markSetupComplete(updatedSession.userId);
-                              if (!mounted) return;
-                              setState(() {
-                                _nextScreen = _GroupEntryBootstrap(
-                                  session: updatedSession,
-                                  identityRepository: _identityRepository,
-                                );
-                              });
-                            },
+                          _nextScreen = _GroupEntryBootstrap(
+                            session: readySession,
+                            identityRepository: _identityRepository,
                           );
                         });
                       },
@@ -131,12 +102,12 @@ class _StartupGateScreenState extends State<StartupGateScreen> {
           },
         );
       });
-    } catch (_) {
+    } catch (error) {
       if (!mounted) return;
 
       setState(() {
         _isLoggingIn = false;
-        _showLetsGo = true;
+        _startupError = error.toString();
       });
     }
   }
@@ -163,118 +134,45 @@ class _StartupGateScreenState extends State<StartupGateScreen> {
     return Scaffold(
       backgroundColor: const Color(0xffF8BE03),
       body: SafeArea(
-        child: Stack(
-          children: [
-            Center(
-              child: AnimatedSlide(
-                offset: _showLetsGo ? Offset(0, -18.h / 100.h) : Offset.zero,
-                duration: _introAnimationDuration,
-                curve: Curves.easeOutCubic,
-                child: Image.asset(
+        child: Center(
+          child: Padding(
+            padding: EdgeInsets.symmetric(horizontal: 28.w),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Image.asset(
                   'assets/logo.png',
                   width: 190.w,
                   fit: BoxFit.contain,
                 ),
-              ),
-            ),
-            Positioned(
-              left: 0,
-              right: 0,
-              bottom: 24.h,
-              child: SafeArea(
-                top: false,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    AnimatedOpacity(
-                      opacity: _showLetsGo ? 1 : 0,
-                      duration: _introAnimationDuration,
-                      child: AnimatedSlide(
-                        offset: _showLetsGo
-                            ? Offset.zero
-                            : const Offset(0, 0.18),
-                        duration: _introAnimationDuration,
-                        curve: Curves.easeOutCubic,
-                        child: SizedBox(
-                          width: 260.w,
-                          height: 52.h,
-                          child: ElevatedButton(
-                            onPressed: _isLoggingIn
-                                ? null
-                                : _continueAfterLogin,
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.white,
-                              foregroundColor: const Color(0xff384047),
-                              elevation: 0,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(26.r),
-                              ),
-                            ),
-                            child: AnimatedSwitcher(
-                              duration: const Duration(milliseconds: 200),
-                              child: _isLoggingIn
-                                  ? SizedBox(
-                                      key: const ValueKey('progress'),
-                                      width: 20.w,
-                                      height: 20.w,
-                                      child: const CircularProgressIndicator(
-                                        strokeWidth: 2.4,
-                                        color: Color(0xff384047),
-                                      ),
-                                    )
-                                  : Text(
-                                      'Let\'s go!',
-                                      key: const ValueKey('label'),
-                                      style: TextStyle(
-                                        fontSize: 16.sp,
-                                        fontWeight: FontWeight.w600,
-                                        color: const Color(0xff384047),
-                                      ),
-                                    ),
-                            ),
-                          ),
-                        ),
-                      ),
+                SizedBox(height: 28.h),
+                if (_startupError == null)
+                  SizedBox.square(
+                    dimension: 24.w,
+                    child: const CircularProgressIndicator(
+                      strokeWidth: 2.5,
+                      color: Color(0xff384047),
                     ),
-                    SizedBox(height: 30.h),
-                    AnimatedOpacity(
-                      opacity: _showLetsGo ? 1 : 0,
-                      duration: _introAnimationDuration,
-                      child: Column(
-                        children: [
-                          Text(
-                            'by continuing you agree to our',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              color: const Color.fromRGBO(56, 64, 71, 0.78),
-                              fontSize: 11.sp,
-                              height: 1.25,
-                            ),
-                          ),
-                          Text(
-                            'terms & policies',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              color: const Color.fromRGBO(56, 64, 71, 0.78),
-                              fontSize: 11.sp,
-                              height: 1.25,
-                              decoration: TextDecoration.underline,
-                              decorationColor: const Color.fromRGBO(
-                                56,
-                                64,
-                                71,
-                                0.78,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
+                  )
+                else ...[
+                  Text(
+                    'We couldn\'t finish setting up your account.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: const Color(0xff7a2f2f),
+                      fontSize: 13.sp,
+                      fontWeight: FontWeight.w600,
                     ),
-                  ],
-                ),
-              ),
+                  ),
+                  SizedBox(height: 14.h),
+                  OutlinedButton(
+                    onPressed: _isLoggingIn ? null : _continueAfterLogin,
+                    child: const Text('Try again'),
+                  ),
+                ],
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );

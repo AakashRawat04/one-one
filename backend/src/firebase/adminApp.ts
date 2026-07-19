@@ -1,6 +1,7 @@
 import { applicationDefault, cert, getApp, getApps, initializeApp, type App } from "firebase-admin/app";
 import { config, firebaseServiceAccountConfigured } from "../config.js";
 import { HttpError } from "../http/httpError.js";
+import { logger } from "../logger.js";
 
 function normalizePrivateKey(privateKey: string) {
   return privateKey.replace(/\\n/g, "\n");
@@ -20,10 +21,25 @@ export function getFirebaseAdminApp(): App | null {
   }
 
   const options = {
-    databaseURL: config.FIREBASE_DATABASE_URL
+    databaseURL: config.FIREBASE_DATABASE_URL,
+    storageBucket:
+      config.FIREBASE_STORAGE_BUCKET ??
+      (config.FIREBASE_PROJECT_ID
+        ? `${config.FIREBASE_PROJECT_ID}.firebasestorage.app`
+        : undefined)
   };
 
   if (firebaseServiceAccountConfigured) {
+    logger.info(
+      {
+        checkpoint: "FCM-BE-00",
+        projectId: config.FIREBASE_PROJECT_ID,
+        credentialSource: "service-account-environment",
+        databaseConfigured: Boolean(config.FIREBASE_DATABASE_URL),
+        storageBucket: config.FIREBASE_STORAGE_BUCKET
+      },
+      "initializing Firebase Admin"
+    );
     return initializeApp({
       ...options,
       credential: cert({
@@ -34,6 +50,16 @@ export function getFirebaseAdminApp(): App | null {
     });
   }
 
+  logger.info(
+    {
+      checkpoint: "FCM-BE-00",
+      projectId: config.FIREBASE_PROJECT_ID,
+      credentialSource: "application-default-credentials",
+      databaseConfigured: Boolean(config.FIREBASE_DATABASE_URL),
+      storageBucket: config.FIREBASE_STORAGE_BUCKET
+    },
+    "initializing Firebase Admin"
+  );
   return initializeApp({
     ...options,
     credential: applicationDefault()

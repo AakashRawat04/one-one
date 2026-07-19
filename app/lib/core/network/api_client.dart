@@ -51,6 +51,39 @@ class ApiClient {
 
     return responseBody;
   }
+
+  Future<Map<String, dynamic>> postBytes(
+    String path,
+    List<int> bytes, {
+    required String contentType,
+    Map<String, String> headers = const {},
+  }) async {
+    final token = await _auth.currentUser?.getIdToken();
+    if (token == null) {
+      throw StateError('Cannot call backend before Firebase sign-in.');
+    }
+
+    final response = await _httpClient.post(
+      Uri.parse('$_baseUrl$path'),
+      headers: {
+        'authorization': 'Bearer $token',
+        'content-type': contentType,
+        ...headers,
+      },
+      body: bytes,
+    );
+    final responseBody = response.body.isEmpty
+        ? <String, dynamic>{}
+        : jsonDecode(response.body) as Map<String, dynamic>;
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw ApiException(
+        statusCode: response.statusCode,
+        code: responseBody['error']?.toString() ?? 'request_failed',
+        message: responseBody['message']?.toString() ?? response.body,
+      );
+    }
+    return responseBody;
+  }
 }
 
 class ApiException implements Exception {

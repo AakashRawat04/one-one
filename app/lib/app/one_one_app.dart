@@ -6,9 +6,17 @@ import 'package:flutter/material.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
+import '../features/subscriptions/data/remote_config_service.dart';
+import '../features/subscriptions/data/revenuecat_service.dart';
+import '../features/subscriptions/data/developer_access_service.dart';
+import '../features/subscriptions/data/subscription_grace_period_store.dart';
+import '../features/subscriptions/models/subscription_state.dart';
+import '../features/subscriptions/ui/paywall_screen.dart';
 import 'accent_theme.dart';
 import 'firebase_setup_blocked_screen.dart';
+import 'google_auth_screen.dart';
 import 'startup_gate_screen.dart';
 
 class OneOneApp extends StatelessWidget {
@@ -136,8 +144,163 @@ class _FirebaseGateState extends State<_FirebaseGate> {
           );
         }
 
-        return const StartupGateScreen();
+        return StreamBuilder<User?>(
+          stream: FirebaseAuth.instance.userChanges(),
+          initialData: FirebaseAuth.instance.currentUser,
+          builder: (context, authSnapshot) {
+            final user = authSnapshot.data;
+            if (user == null ||
+                user.isAnonymous ||
+                !user.providerData.any(
+                  (provider) => provider.providerId == 'google.com',
+                )) {
+              return const GoogleAuthScreen();
+            }
+
+            return _AuthenticatedSubscriptionGate(
+              key: ValueKey(user.uid),
+              user: user,
+            );
+          },
+        );
       },
     );
+  }
+}
+
+class _AuthenticatedSubscriptionGate extends StatefulWidget {
+  const _AuthenticatedSubscriptionGate({super.key, required this.user});
+
+  final User user;
+
+  @override
+  State<_AuthenticatedSubscriptionGate> createState() =>
+      _AuthenticatedSubscriptionGateState();
+}
+
+class _AuthenticatedSubscriptionGateState
+    extends State<_AuthenticatedSubscriptionGate> {
+  RemoteConfigService? _remoteConfigService;
+  RevenueCatService? _revenueCatService;
+  Future<SubscriptionState?>? _subscriptionCheckFuture;
+  Timer? _graceDeadlineTimer;
+
+  @override
+  void dispose() {
+    _graceDeadlineTimer?.cancel();
+    _revenueCatService?.dispose();
+    unawaited(_remoteConfigService?.dispose());
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => _subscriptionGate();
+
+  Widget _subscriptionGate() {
+    final remoteConfig = _remoteConfigService;
+    final revenueCat = _revenueCatService;
+
+    if (remoteConfig == null || revenueCat == null) {
+      // Kick off initialisation once.
+      _subscriptionCheckFuture ??= _initSubscriptions();
+      return FutureBuilder<SubscriptionState?>(
+        future: _subscriptionCheckFuture,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState != ConnectionState.done) {
+            return Scaffold(
+              backgroundColor: const Color(0xffF8BE03),
+              body: SafeArea(
+                child: Center(
+                  child: Image.asset(
+                    'assets/logo.png',
+                    width: 190.w,
+                    fit: BoxFit.contain,
+                  ),
+                ),
+              ),
+            );
+          }
+          if (snapshot.hasError || snapshot.data == null) {
+            // Fall through to the app — don't block on errors.
+            return const StartupGateScreen();
+          }
+          return _buildSubscriptionDecision(snapshot.data!);
+        },
+      );
+    }
+
+    // Services are ready — use the stream for live updates.
+    return StreamBuilder<SubscriptionState>(
+      stream: revenueCat.subscriptionStateStream,
+      initialData: revenueCat.latestState,
+      builder: (context, snapshot) {
+        final state = snapshot.data;
+        if (state == null) return const StartupGateScreen();
+        return _buildSubscriptionDecision(state);
+      },
+    );
+  }
+
+  Widget _buildSubscriptionDecision(SubscriptionState state) {
+    _scheduleGraceDeadline(state);
+    if (state.shouldBlock) {
+      return PaywallScreen(
+        revenueCatService: _revenueCatService!,
+        subscriptionState: state,
+      );
+    }
+    return const StartupGateScreen();
+  }
+
+  void _scheduleGraceDeadline(SubscriptionState state) {
+    _graceDeadlineTimer?.cancel();
+    _graceDeadlineTimer = null;
+    if (state.isSubscribed || state.hasDeveloperBypass) return;
+    final deadline = state.graceEndsAt;
+    if (deadline == null) return;
+    final remainingMs = deadline - DateTime.now().millisecondsSinceEpoch;
+    if (remainingMs <= 0) return;
+    _graceDeadlineTimer = Timer(Duration(milliseconds: remainingMs), () {
+      if (mounted) setState(() {});
+    });
+  }
+
+  Future<SubscriptionState?> _initSubscriptions() async {
+    try {
+      // 1. Set up Remote Config for tier/grace-period flags.
+      final remoteConfig = RemoteConfigService();
+      await remoteConfig.initialize();
+      _remoteConfigService = remoteConfig;
+
+      // Google authentication happens before subscriptions and onboarding, so
+      // RevenueCat always receives the stable authenticated Firebase UID.
+      final auth = FirebaseAuth.instance;
+      final prefs = await SharedPreferences.getInstance();
+      if (auth.currentUser?.uid != widget.user.uid || widget.user.isAnonymous) {
+        throw StateError('Google authentication is required.');
+      }
+
+      // 3. Resolve server-verified developer access and grace-period storage.
+      final developerAccess = DeveloperAccessService(auth: auth);
+      final hasDeveloperBypass = await developerAccess.hasDeveloperBypass();
+      final gracePeriodStore = SubscriptionGracePeriodStore(preferences: prefs);
+
+      // 4. Set up RevenueCat with the Firebase UID as its App User ID.
+      final revenueCat = RevenueCatService(
+        remoteConfigService: remoteConfig,
+        appUserId: widget.user.uid,
+        developerAccessService: developerAccess,
+        gracePeriodStore: gracePeriodStore,
+        hasDeveloperBypass: hasDeveloperBypass,
+      );
+      await revenueCat.initialize();
+      _revenueCatService = revenueCat;
+
+      return revenueCat.latestState;
+    } catch (e) {
+      debugPrint('Subscription init error: $e');
+      // Never block the user because of a subscription-check failure.
+      return null;
+    }
   }
 }
