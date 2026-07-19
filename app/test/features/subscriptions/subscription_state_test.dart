@@ -5,6 +5,7 @@ import 'package:one_one_app/features/subscriptions/models/subscription_tier.dart
 SubscriptionState state({
   bool subscribed = false,
   bool developer = false,
+  bool hardPaywall = false,
   SubscriptionTier tier = SubscriptionTier.extreme,
   int? graceEndsAt = 1000,
 }) {
@@ -14,6 +15,7 @@ SubscriptionState state({
     activeTier: tier,
     gracePeriodDays: 7,
     developerRedeemEnabled: true,
+    requiresImmediateSubscription: hardPaywall,
     graceEndsAt: graceEndsAt,
   );
 }
@@ -21,6 +23,26 @@ SubscriptionState state({
 void main() {
   test('normal tier never blocks free users', () {
     expect(state(tier: SubscriptionTier.normal).shouldBlockAt(5000), isFalse);
+  });
+
+  test('public hard paywall blocks regardless of pricing tier', () {
+    expect(
+      state(
+        tier: SubscriptionTier.normal,
+        hardPaywall: true,
+      ).shouldBlockAt(0),
+      isTrue,
+    );
+  });
+
+  test('public hard paywall never honors a developer claim', () {
+    expect(
+      state(
+        developer: true,
+        hardPaywall: true,
+      ).shouldBlockAt(0),
+      isTrue,
+    );
   });
 
   test('extreme tier blocks only after grace deadline', () {

@@ -13,6 +13,7 @@ import {
   sendRingNudge
 } from "../notifications/voiceNudgeService.js";
 import { maxVoiceNudgeBytes } from "../notifications/voiceNudgeValidation.js";
+import { respondToNudge } from "../notifications/nudgeResponseService.js";
 
 const friendLiveSchema = z.object({
   deviceId: z.string().min(1),
@@ -43,6 +44,10 @@ const ringNudgeSchema = z.object({
 
 const voiceNudgeAckSchema = z.object({
   status: z.enum(["played", "failed"])
+});
+
+const nudgeResponseSchema = z.object({
+  action: z.enum(["accept", "decline", "snooze"])
 });
 
 export function createNotificationRoutes() {
@@ -82,6 +87,25 @@ export function createNotificationRoutes() {
       });
 
       response.status(200).json(result);
+    })
+  );
+
+  router.post(
+    "/v1/groups/:groupId/nudges/:eventId/respond",
+    requireFirebaseAuth,
+    asyncHandler(async (request, response) => {
+      const authRequest = request as AuthenticatedRequest;
+      const groupId = z.string().min(1).parse(request.params.groupId);
+      const eventId = z.string().min(1).parse(request.params.eventId);
+      const body = nudgeResponseSchema.parse(request.body);
+      response.status(200).json(
+        await respondToNudge({
+          groupId,
+          eventId,
+          responderUserId: authRequest.auth.uid,
+          action: body.action
+        })
+      );
     })
   );
 

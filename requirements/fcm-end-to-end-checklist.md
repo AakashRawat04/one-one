@@ -162,7 +162,7 @@ Expected Android behavior by state:
 
 | Nudge | Foreground | Background | Removed from Recents / locked |
 | --- | --- | --- | --- |
-| Push | Native service displays `[FCM-08]` | Android displays notification payload | Android displays notification payload |
+| Push | Native service displays actionable `[FCM-08]` notification | High-priority data message builds actionable native notification | High-priority data message builds actionable native notification |
 | 3/5/10-second Ring | Native service rings | High-priority data message starts playback service | High-priority data message starts playback service |
 | Voice | Native service downloads and plays | High-priority data message starts playback service | High-priority data message starts playback service |
 
@@ -188,6 +188,8 @@ On the receiver, expect:
 - `[FCM-E8/E9]` means Android failed to acquire or release the bounded playback wake lock.
 - `[FCM-W6]` means the playback service received an invalid start request.
 - `[FCM-W7]` means FCM discarded queued messages before delivery.
+- `[FCM-W8..W10]` means an actionable nudge was missing its event/group routing data.
+- `[NUDGE-ACTION-01..03]` traces notification response upload, app action queuing, and sender response receipt.
 - Force-stopping the app prevents delivery until the user manually opens it.
 - A powered-off phone cannot receive or play a nudge; it can only receive after
   boot and reconnection if the message has not expired.

@@ -3,9 +3,10 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 
 import '../data/revenuecat_service.dart';
 import '../models/subscription_state.dart';
+import '../models/subscription_tier.dart';
 
-/// Full-screen blocker shown when the extreme pricing tier is active
-/// and the user does not have an active "OneOne Pro" subscription.
+/// Full-screen blocker shown when the current distribution requires an active
+/// "OneOne Pro" subscription.
 ///
 /// Explains that high demand means the app needs subscriptions to keep
 /// running, and offers a single path forward: subscribe via the RevenueCat
@@ -124,6 +125,8 @@ class _PaywallScreenState extends State<PaywallScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final highDemand =
+        widget.subscriptionState.activeTier == SubscriptionTier.extreme;
     return Scaffold(
       backgroundColor: const Color(0xff0d0d0d),
       body: SafeArea(
@@ -136,7 +139,9 @@ class _PaywallScreenState extends State<PaywallScreen> {
               Image.asset('assets/logo.png', width: 120.w, fit: BoxFit.contain),
               SizedBox(height: 28.h),
               Text(
-                'We\'re Experiencing\nHigh Demand! 🚀',
+                highDemand
+                    ? 'We\'re Experiencing\nHigh Demand! 🚀'
+                    : 'Stay connected\nwith One One',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: Colors.white,
@@ -147,10 +152,14 @@ class _PaywallScreenState extends State<PaywallScreen> {
               ),
               SizedBox(height: 16.h),
               Text(
-                'To keep One One fast and reliable for everyone, '
-                'we\'re asking new users to subscribe during this busy period. '
-                'Your support helps us maintain the servers and deliver '
-                'the best voice experience.',
+                highDemand
+                    ? 'To keep One One fast and reliable for everyone, '
+                        'we\'re asking users to subscribe during this busy period. '
+                        'Your support helps us maintain the servers and deliver '
+                        'the best voice experience.'
+                    : 'Choose a monthly or quarterly plan to continue using '
+                        'One One. Your subscription keeps calls reliable and '
+                        'supports the service.',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: Colors.white70,

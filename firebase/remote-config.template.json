@@ -38,8 +38,13 @@
     },
     "subscription_developer_redeem_enabled": {
       "defaultValue": { "value": "false" },
-      "description": "Shows the server-validated developer redeem-code action on the blocker.",
+      "description": "Allows the server-validated redeem action only when the binary was also compiled with ONE_ONE_BUILD_AUDIENCE=internal. Public binaries ignore this value.",
       "valueType": "BOOLEAN"
+    },
+    "subscription_internal_trial_hours": {
+      "defaultValue": { "value": "6" },
+      "description": "Internal-build extreme-tier trial window in hours. Public binaries ignore this value and hard-gate on entitlement.",
+      "valueType": "NUMBER"
     }
   },
   "version": {

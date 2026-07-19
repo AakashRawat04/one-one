@@ -15,12 +15,19 @@
    rule is the final cleanup safety net.
 
 The same native service produces the three-, five-, and ten-second Ring nudge.
-Ordinary Push nudges continue to use an FCM notification payload.
+Ordinary Push nudges now use the same high-priority data path so Android can
+render Accept, Busy 5 min, and Decline actions consistently in every app state.
 
-Foreground Push notifications are displayed explicitly by the native messaging
-service. In the background or after removal from Recents, Android displays the
-notification payload. Ring and Voice use high-priority data messages in all
-three states so the native playback service can run without Flutter.
+Push notifications are displayed explicitly by the native messaging service in
+every state. Ring and Voice use high-priority data messages so the native
+playback service can run without Flutter. Their foreground-service notification
+is detached and replaced with an actionable, auto-cancel notification after
+playback, so it remains in Notification Center.
+
+Timed rings use Android's continuous supervisory ringtone and stop it at the
+requested 3/5/10-second deadline. The `voice_nudges` notification channel stays
+silent because the foreground service owns voice/ring playback; using a channel
+sound would create a second, duration-uncontrolled sound.
 
 ## Required backend configuration
 

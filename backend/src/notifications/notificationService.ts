@@ -1,6 +1,7 @@
 import { getRealtimeDatabase } from "../firebase/database.js";
 import {
   isPermanentMessagingTargetError,
+  sendAndroidDataPushes,
   sendPushToTokens
 } from "../firebase/messaging.js";
 import { config } from "../config.js";
@@ -35,6 +36,7 @@ type RecipientDevice = {
 };
 
 const friendLiveDedupeSeconds = 60;
+const actionableNudgeTtlMs = 10 * 60 * 1000;
 
 export async function sendFriendLiveNotification(input: FriendLiveInput) {
   const db = getRealtimeDatabase();
@@ -130,7 +132,6 @@ export async function sendFriendLiveNotification(input: FriendLiveInput) {
 }
 
 export async function sendNudgeNotification(input: NudgeInput) {
-  const db = getRealtimeDatabase();
   await requireActiveUser(input.senderUserId);
   await requireActiveGroup(input.groupId);
   await requireActiveGroupMember(input.groupId, input.senderUserId);
@@ -161,17 +162,22 @@ export async function sendNudgeNotification(input: NudgeInput) {
     metadata: {}
   });
 
-  const pushResult = await sendPushToTokens({
-    tokens: recipientDevices.map((device) => device.fcmToken),
-    title: `${senderName} nudged you`,
-    body: "Come online on One One",
-    data: {
-      type: "nudge",
-      groupId: input.groupId,
-      senderUserId: input.senderUserId,
-      deepLink: `walkie://group/${input.groupId}`
-    }
-  });
+  const baseUrl = config.PUBLIC_API_BASE_URL.replace(/\/$/, "");
+  const pushResult = await sendAndroidDataPushes(
+    recipientDevices.map((device) => ({
+      token: device.fcmToken,
+      data: {
+        type: "nudge",
+        eventId: notificationEventId,
+        groupId: input.groupId,
+        senderUserId: input.senderUserId,
+        senderName,
+        responseUrl: `${baseUrl}/v1/groups/${input.groupId}/nudges/${notificationEventId}/respond`,
+        deepLink: `walkie://group/${input.groupId}`
+      }
+    })),
+    actionableNudgeTtlMs
+  );
 
   await writeDeliveries(notificationEventId, recipientDevices, pushResult);
   await writeStatusEvent(input.groupId, input.senderUserId, "nudge_sent", {

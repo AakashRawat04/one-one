@@ -152,6 +152,7 @@ export async function createVoiceNudge(input: CreateVoiceNudgeInput) {
         expiresAt: String(expiresAt),
         audioUrl: `${baseUrl}/v1/voice-nudges/${eventId}/audio`,
         ackUrl: `${baseUrl}/v1/voice-nudges/${eventId}/ack`,
+        responseUrl: `${baseUrl}/v1/groups/${input.groupId}/nudges/${eventId}/respond`,
         deliveryToken: delivery.token
       }
     })),
@@ -218,7 +219,8 @@ export async function sendRingNudge(input: SendRingNudgeInput) {
         groupId: input.groupId,
         senderUserId: input.senderUserId,
         senderName: context.senderName,
-        durationMs: String(input.durationSeconds * 1000)
+        durationMs: String(input.durationSeconds * 1000),
+        responseUrl: `${config.PUBLIC_API_BASE_URL.replace(/\/$/, "")}/v1/groups/${input.groupId}/nudges/${eventId}/respond`
       }
     })),
     ringNudgePushTtlMs

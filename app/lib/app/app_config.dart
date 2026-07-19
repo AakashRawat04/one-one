@@ -1,4 +1,13 @@
 class AppConfig {
+  /// Compile-time distribution guard. The default is deliberately public so
+  /// an omitted dart-define can never expose internal redemption controls.
+  static const String buildAudience = String.fromEnvironment(
+    'ONE_ONE_BUILD_AUDIENCE',
+    defaultValue: 'public',
+  );
+
+  static bool get isInternalBuild => buildAudience == 'internal';
+
   static const String apiBaseUrl = String.fromEnvironment(
     'ONE_ONE_API_BASE_URL',
     defaultValue: 'https://one-one-xw00.onrender.com',
