@@ -5,11 +5,15 @@
 1. Flutter records a maximum six-second AAC/M4A voice nudge and uploads it to
    the authenticated backend.
 2. The backend stores it privately in Firebase Storage, creates one opaque
-   delivery token per active Android device, and sends a high-priority,
-   data-only FCM message.
+   delivery token per active Android device, issues a short-lived Cloud Storage
+   signed read URL for the object, and sends a high-priority, data-only FCM
+   message containing that signed `audioUrl` (plus `ackUrl` / delivery token).
 3. `VoiceNudgeMessagingService` starts `VoiceNudgePlaybackService`. The
-   foreground service holds a bounded CPU wake lock, downloads and plays the
-   recording without starting Flutter, then acknowledges completion.
+   foreground service holds a bounded CPU wake lock, downloads the recording
+   directly from Cloud Storage (signed URL), plays it without starting Flutter,
+   then acknowledges completion to the backend. Older clients that still call
+   `GET /v1/voice-nudges/:eventId/audio` receive a 302 redirect to a signed URL
+   instead of a proxied audio body.
 4. The backend deletes the Storage object after every intended recipient has
    played it. Media expires after ten minutes when accessed; a bucket lifecycle
    rule is the final cleanup safety net.

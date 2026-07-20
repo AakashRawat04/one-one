@@ -190,42 +190,68 @@ class VoiceNudgePlaybackService : Service() {
     }
 
     private fun downloadAudio(request: NudgeRequest): File {
-        val audioUrl = requireNotNull(request.audioUrl) { "Missing audio URL" }
-        val deliveryToken = requireNotNull(request.deliveryToken) { "Missing delivery token" }
-        val connection = URL(audioUrl).openConnection() as HttpURLConnection
-        connection.connectTimeout = 8_000
-        connection.readTimeout = 8_000
-        connection.requestMethod = "GET"
-        connection.setRequestProperty("x-one-one-delivery-token", deliveryToken)
-        connection.setRequestProperty("accept", "audio/mp4")
-        try {
-            val responseCode = connection.responseCode
-            Log.i(
-                VoiceNudgeDiagnostics.tag,
-                "[FCM-13A] Voice audio HTTP response=$responseCode",
-            )
-            if (responseCode !in 200..299) {
-                throw IllegalStateException("Audio download failed with HTTP $responseCode")
-            }
-            val output = File(cacheDir, "voice_nudge_${request.eventId.safeFileName()}.m4a")
-            connection.inputStream.use { input ->
-                FileOutputStream(output).use { sink ->
-                    val buffer = ByteArray(8 * 1024)
-                    var total = 0
-                    while (true) {
-                        val count = input.read(buffer)
-                        if (count < 0) break
-                        total += count
-                        if (total > maxAudioBytes) throw IllegalStateException("Voice nudge is too large")
-                        sink.write(buffer, 0, count)
-                    }
-                    if (total == 0) throw IllegalStateException("Voice nudge is empty")
+        var currentUrl = requireNotNull(request.audioUrl) { "Missing audio URL" }
+        var redirects = 0
+        while (true) {
+            val connection = URL(currentUrl).openConnection() as HttpURLConnection
+            // Manual redirects so the delivery-token header is never forwarded
+            // to Cloud Storage signed URLs (would break V4 signature checks).
+            connection.instanceFollowRedirects = false
+            connection.connectTimeout = 8_000
+            connection.readTimeout = 8_000
+            connection.requestMethod = "GET"
+            connection.setRequestProperty("accept", "audio/mp4")
+            if (isBackendAudioProxyUrl(currentUrl)) {
+                val deliveryToken = requireNotNull(request.deliveryToken) {
+                    "Missing delivery token"
                 }
+                connection.setRequestProperty("x-one-one-delivery-token", deliveryToken)
             }
-            return output
-        } finally {
-            connection.disconnect()
+            try {
+                val responseCode = connection.responseCode
+                Log.i(
+                    VoiceNudgeDiagnostics.tag,
+                    "[FCM-13A] Voice audio HTTP response=$responseCode",
+                )
+                if (responseCode in 300..399) {
+                    val location = connection.getHeaderField("Location")
+                        ?: throw IllegalStateException("Audio redirect missing Location")
+                    if (redirects >= 3) {
+                        throw IllegalStateException("Too many audio download redirects")
+                    }
+                    currentUrl = location
+                    redirects += 1
+                    continue
+                }
+                if (responseCode !in 200..299) {
+                    throw IllegalStateException("Audio download failed with HTTP $responseCode")
+                }
+                val output = File(cacheDir, "voice_nudge_${request.eventId.safeFileName()}.m4a")
+                connection.inputStream.use { input ->
+                    FileOutputStream(output).use { sink ->
+                        val buffer = ByteArray(8 * 1024)
+                        var total = 0
+                        while (true) {
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            total += count
+                            if (total > maxAudioBytes) {
+                                throw IllegalStateException("Voice nudge is too large")
+                            }
+                            sink.write(buffer, 0, count)
+                        }
+                        if (total == 0) throw IllegalStateException("Voice nudge is empty")
+                    }
+                }
+                return output
+            } finally {
+                connection.disconnect()
+            }
         }
+    }
+
+    private fun isBackendAudioProxyUrl(url: String): Boolean {
+        return url.contains("/v1/voice-nudges/") && url.contains("/audio")
     }
 
     private fun startPlayer(request: NudgeRequest, file: File) {

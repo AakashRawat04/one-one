@@ -69,6 +69,7 @@ function logEmptyBatch(operation: string) {
   logger.warn(
     {
       checkpoint: "FCM-BE-W0",
+      category: "expected",
       operation,
       targetCount: 0
     },
@@ -97,6 +98,7 @@ async function sendMessagesWithDiagnostics(messages: Message[], operation: strin
   logger.info(
     {
       checkpoint: "FCM-BE-01",
+      category: "expected",
       operation,
       targetCount: messages.length,
       fidCount,
@@ -114,6 +116,7 @@ async function sendMessagesWithDiagnostics(messages: Message[], operation: strin
     log(
       {
         checkpoint: result.failureCount > 0 ? "FCM-BE-W1" : "FCM-BE-02",
+        category: result.failureCount > 0 ? "unexpected" : "expected",
         operation,
         successCount: result.successCount,
         failureCount: result.failureCount,
@@ -134,6 +137,7 @@ async function sendMessagesWithDiagnostics(messages: Message[], operation: strin
     logger.error(
       {
         checkpoint: "FCM-BE-E1",
+        category: "unexpected",
         operation,
         error: diagnostic
       },

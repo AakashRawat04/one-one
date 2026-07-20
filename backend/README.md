@@ -63,9 +63,13 @@ POST /v1/subscriptions/redeem
 
 The voice-nudge upload endpoint accepts an authenticated `audio/mp4` body of
 at most 96 KiB, `x-voice-duration-ms`, and the `targetScope` / optional
-`targetUserId` query parameters. Download and acknowledgement requests are
-authorized by the short-lived per-device token delivered through FCM; they do
-not use Firebase Auth because they must work before Flutter starts.
+`targetUserId` query parameters. FCM delivers a short-lived Cloud Storage
+signed `audioUrl` so recipients download audio directly from Storage (no
+backend audio proxy). `GET /v1/voice-nudges/:eventId/audio` remains as a
+compatibility redirect (302) to a fresh signed URL for older clients.
+Acknowledgement requests are authorized by the short-lived per-device token
+delivered through FCM; they do not use Firebase Auth because they must work
+before Flutter starts.
 
 Set `FIREBASE_STORAGE_BUCKET` and `PUBLIC_API_BASE_URL` in production. Add a
 Cloud Storage lifecycle rule that removes objects under `voiceNudges/` after

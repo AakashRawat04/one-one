@@ -3,7 +3,7 @@ import {
   isPermanentMessagingTargetError,
   sendAndroidDataPushes
 } from "../firebase/messaging.js";
-import { getVoiceNudgeBucket } from "../firebase/storage.js";
+import { getVoiceNudgeBucket, createVoiceNudgeSignedReadUrl } from "../firebase/storage.js";
 import { config } from "../config.js";
 import {
   requireActiveGroup,
@@ -64,21 +64,76 @@ export async function createVoiceNudge(input: CreateVoiceNudgeInput) {
     throw new HttpError(500, "notification_event_id_failed", "Failed to allocate voice nudge id.");
   }
 
+  logger.info(
+    {
+      checkpoint: "VOICE-NUDGE-BE-01",
+      category: "expected",
+      eventId,
+      groupId: input.groupId,
+      audioBytes: input.audio.length,
+      durationMs: input.durationMs
+    },
+    "voice nudge upload accepted, writing to Cloud Storage"
+  );
+
   const now = nowSeconds();
   const expiresAt = now + voiceNudgeMediaTtlSeconds;
   const storagePath = `voiceNudges/${eventId}.m4a`;
   const file = getVoiceNudgeBucket().file(storagePath);
-  await file.save(input.audio, {
-    resumable: false,
-    contentType: "audio/mp4",
-    metadata: {
-      cacheControl: "private, no-store, max-age=0",
+  try {
+    await file.save(input.audio, {
+      resumable: false,
+      contentType: "audio/mp4",
       metadata: {
-        eventId,
-        expiresAt: String(expiresAt)
+        cacheControl: "private, no-store, max-age=0",
+        metadata: {
+          eventId,
+          expiresAt: String(expiresAt)
+        }
       }
-    }
-  });
+    });
+  } catch (error) {
+    logger.error(
+      {
+        checkpoint: "VOICE-NUDGE-BE-E1",
+        category: "unexpected",
+        eventId,
+        storagePath,
+        audioBytes: input.audio.length,
+        error: describeError(error)
+      },
+      "voice nudge Cloud Storage write failed"
+    );
+    throw error;
+  }
+  logger.info(
+    {
+      checkpoint: "VOICE-NUDGE-BE-02",
+      category: "expected",
+      eventId,
+      storagePath,
+      audioBytes: input.audio.length
+    },
+    "voice nudge audio stored in Cloud Storage"
+  );
+
+  let signedAudioUrl: string;
+  try {
+    signedAudioUrl = await createVoiceNudgeSignedReadUrl(storagePath, expiresAt * 1000);
+  } catch (error) {
+    logger.error(
+      {
+        checkpoint: "VOICE-NUDGE-BE-E1",
+        category: "unexpected",
+        eventId,
+        storagePath,
+        error: describeError(error)
+      },
+      "voice nudge signed URL generation failed, rolling back Cloud Storage object"
+    );
+    await file.delete({ ignoreNotFound: true }).catch(() => undefined);
+    throw error;
+  }
 
   const deliveryTokens = context.recipientDevices.map((device) => ({
     device,
@@ -129,11 +184,30 @@ export async function createVoiceNudge(input: CreateVoiceNudgeInput) {
   try {
     await db.ref().update(updates);
   } catch (error) {
+    logger.error(
+      {
+        checkpoint: "VOICE-NUDGE-BE-E2",
+        category: "unexpected",
+        eventId,
+        storagePath,
+        error: describeError(error)
+      },
+      "voice nudge Realtime Database metadata write failed, rolling back Cloud Storage object"
+    );
     await file.delete({ ignoreNotFound: true }).catch(() => undefined);
     throw error;
   }
 
   if (deliveryTokens.length === 0) {
+    logger.info(
+      {
+        checkpoint: "VOICE-NUDGE-BE-W1",
+        category: "expected",
+        eventId,
+        reason: "no_recipients"
+      },
+      "voice nudge has no active recipient devices, purging Cloud Storage object immediately"
+    );
     await purgeVoiceNudge(eventId, "no_recipients");
     return nudgeResult(eventId, context.recipientUserIds.length, 0, 0, 0);
   }
@@ -150,7 +224,8 @@ export async function createVoiceNudge(input: CreateVoiceNudgeInput) {
         senderName: context.senderName,
         durationMs: String(input.durationMs),
         expiresAt: String(expiresAt),
-        audioUrl: `${baseUrl}/v1/voice-nudges/${eventId}/audio`,
+        // Direct Cloud Storage download — eliminates backend audio proxy egress.
+        audioUrl: signedAudioUrl,
         ackUrl: `${baseUrl}/v1/voice-nudges/${eventId}/ack`,
         responseUrl: `${baseUrl}/v1/groups/${input.groupId}/nudges/${eventId}/respond`,
         deliveryToken: delivery.token
@@ -179,6 +254,24 @@ export async function createVoiceNudge(input: CreateVoiceNudgeInput) {
     }
   });
   await db.ref().update(deliveryUpdates);
+
+  logger.info(
+    {
+      checkpoint: "VOICE-NUDGE-BE-03",
+      category: "expected",
+      eventId,
+      audioBytes: input.audio.length,
+      targetDevices: context.recipientDevices.length,
+      sent: pushResult.successCount,
+      failed: pushResult.failureCount,
+      // Recipients download directly from Cloud Storage via the signed URL in
+      // the FCM payload. Backend audio proxy egress should no longer appear
+      // for new clients; expectedDownloadFanout is the expected GCS GET count.
+      deliveryMode: "signed_url",
+      expectedDownloadFanout: pushResult.successCount
+    },
+    "voice nudge dispatched via FCM with Cloud Storage signed URL"
+  );
 
   return nudgeResult(
     eventId,
@@ -236,22 +329,68 @@ export async function sendRingNudge(input: SendRingNudgeInput) {
   );
 }
 
-export async function downloadVoiceNudge(eventId: string, token: string) {
+/**
+ * Issues a short-lived Cloud Storage signed URL and marks the delivery
+ * downloaded. Used by GET /audio as a compatibility redirect for older
+ * clients that still hit the backend instead of using the FCM signed URL.
+ * Does not proxy audio bytes through the backend.
+ */
+export async function resolveVoiceNudgeAudioRedirect(eventId: string, token: string) {
   const access = await requireDeliveryAccess(eventId, token);
   const now = nowSeconds();
   if (access.expiresAt <= now) {
+    logger.warn(
+      {
+        checkpoint: "VOICE-NUDGE-BE-W2",
+        category: "expected",
+        eventId,
+        deliveryId: access.deliveryId,
+        reason: "expired"
+      },
+      "voice nudge audio requested after expiry, purging Cloud Storage object"
+    );
     await purgeVoiceNudge(eventId, "expired");
     throw new HttpError(410, "voice_nudge_expired", "Voice nudge has expired.");
   }
 
-  const [audio] = await getVoiceNudgeBucket().file(access.storagePath).download();
+  let signedUrl: string;
+  try {
+    signedUrl = await createVoiceNudgeSignedReadUrl(access.storagePath, access.expiresAt * 1000);
+  } catch (error) {
+    logger.error(
+      {
+        checkpoint: "VOICE-NUDGE-BE-E3",
+        category: "unexpected",
+        eventId,
+        deliveryId: access.deliveryId,
+        storagePath: access.storagePath,
+        error: describeError(error)
+      },
+      "voice nudge signed URL generation failed for audio redirect"
+    );
+    throw error;
+  }
+
+  logger.info(
+    {
+      checkpoint: "VOICE-NUDGE-BE-04",
+      category: "expected",
+      eventId,
+      deliveryId: access.deliveryId,
+      storagePath: access.storagePath,
+      egress: "signed_url_redirect"
+    },
+    "voice nudge audio redirecting client to Cloud Storage signed URL"
+  );
+
   await getRealtimeDatabase().ref().update({
     [`voiceNudges/${eventId}/deliveries/${access.deliveryId}/deliveryState`]: "downloaded",
     [`voiceNudges/${eventId}/deliveries/${access.deliveryId}/downloadedAt`]: now,
     [`notificationDeliveries/${eventId}/${access.deliveryId}/deliveryState`]: "downloaded",
     [`notificationDeliveries/${eventId}/${access.deliveryId}/downloadedAt`]: now
   });
-  return audio;
+
+  return { signedUrl, deliveryId: access.deliveryId };
 }
 
 export async function acknowledgeVoiceNudge(
@@ -267,6 +406,18 @@ export async function acknowledgeVoiceNudge(
     [`notificationDeliveries/${eventId}/${access.deliveryId}/deliveryState`]: status,
     [`notificationDeliveries/${eventId}/${access.deliveryId}/acknowledgedAt`]: now
   });
+
+  const log = status === "played" ? logger.info.bind(logger) : logger.warn.bind(logger);
+  log(
+    {
+      checkpoint: "VOICE-NUDGE-BE-06",
+      category: status === "played" ? "expected" : "unexpected",
+      eventId,
+      deliveryId: access.deliveryId,
+      status
+    },
+    "voice nudge playback acknowledgement received"
+  );
 
   if (status === "played") {
     await deleteWhenEveryRecipientPlayed(eventId, access.storagePath);
@@ -330,6 +481,7 @@ async function enforceNudgeRateLimits(
     logger.warn(
       {
         checkpoint: "NUDGE-BE-W1",
+        category: "expected",
         reason: "group_limit",
         recentCount: recent.length,
         configuredLimit: config.NUDGE_RATE_LIMIT_MAX_PER_GROUP,
@@ -359,6 +511,7 @@ async function enforceNudgeRateLimits(
       logger.warn(
         {
           checkpoint: "NUDGE-BE-W2",
+          category: "expected",
           reason: "recipient_cooldown",
           retryAfterSeconds: config.NUDGE_RECIPIENT_COOLDOWN_SECONDS
         },
@@ -399,10 +552,28 @@ async function collectAndroidRecipientDevices(userIds: string[]) {
 
 async function requireDeliveryAccess(eventId: string, token: string) {
   if (!token) {
+    logger.warn(
+      {
+        checkpoint: "VOICE-NUDGE-BE-W3",
+        category: "unexpected",
+        eventId,
+        reason: "missing_delivery_token"
+      },
+      "voice nudge audio/ack request missing delivery token"
+    );
     throw new HttpError(401, "missing_delivery_token", "Voice nudge delivery token is required.");
   }
   const snapshot = await getRealtimeDatabase().ref(`voiceNudges/${eventId}`).get();
   if (!snapshot.exists() || !isRecord(snapshot.val())) {
+    logger.warn(
+      {
+        checkpoint: "VOICE-NUDGE-BE-W3",
+        category: "unexpected",
+        eventId,
+        reason: "voice_nudge_not_found"
+      },
+      "voice nudge audio/ack request referenced an unknown eventId"
+    );
     throw new HttpError(404, "voice_nudge_not_found", "Voice nudge does not exist.");
   }
   const value = snapshot.val() as Record<string, unknown>;
@@ -417,6 +588,15 @@ async function requireDeliveryAccess(eventId: string, token: string) {
       };
     }
   }
+  logger.warn(
+    {
+      checkpoint: "VOICE-NUDGE-BE-W3",
+      category: "unexpected",
+      eventId,
+      reason: "invalid_delivery_token"
+    },
+    "voice nudge audio/ack request presented a token that matched no delivery"
+  );
   throw new HttpError(403, "invalid_delivery_token", "Voice nudge delivery token is invalid.");
 }
 
@@ -437,6 +617,16 @@ async function deleteWhenEveryRecipientPlayed(eventId: string, storagePath: stri
     voiceNudgeState: "completed",
     storageDeletedAt: nowSeconds()
   });
+  logger.info(
+    {
+      checkpoint: "VOICE-NUDGE-BE-07",
+      category: "expected",
+      eventId,
+      storagePath,
+      reason: "all_recipients_played"
+    },
+    "voice nudge Cloud Storage object deleted after every recipient played it"
+  );
 }
 
 async function purgeVoiceNudge(eventId: string, reason: string) {
@@ -451,6 +641,27 @@ async function purgeVoiceNudge(eventId: string, reason: string) {
     voiceNudgeState: reason,
     storageDeletedAt: nowSeconds()
   });
+  logger.info(
+    {
+      checkpoint: "VOICE-NUDGE-BE-08",
+      category: "expected",
+      eventId,
+      storagePath: storagePath ?? null,
+      reason
+    },
+    "voice nudge Cloud Storage object purged"
+  );
+}
+
+function describeError(error: unknown) {
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+      code: "code" in error ? String((error as { code: unknown }).code) : undefined
+    };
+  }
+  return { name: typeof error, message: String(error) };
 }
 
 async function writePublicDeliveries(

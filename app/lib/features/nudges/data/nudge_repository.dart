@@ -1,4 +1,4 @@
-import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 
 import '../../../core/network/api_client.dart';
 
@@ -72,13 +72,34 @@ class NudgeRepository {
     required int durationMs,
   }) async {
     final query = Uri(queryParameters: target.query).query;
-    final response = await _apiClient.postBytes(
-      '/v1/groups/$groupId/voice-nudges?$query',
-      audio,
-      contentType: 'audio/mp4',
-      headers: {'x-voice-duration-ms': '$durationMs'},
+    final stopwatch = Stopwatch()..start();
+    debugPrint(
+      '[OneOneNudge][DART-01] Uploading voice nudge '
+      'audioBytes=${audio.length} durationMs=$durationMs '
+      'targetScope=${target.targetScope}',
     );
-    return _requireAcceptedDelivery(response);
+    try {
+      final response = await _apiClient.postBytes(
+        '/v1/groups/$groupId/voice-nudges?$query',
+        audio,
+        contentType: 'audio/mp4',
+        headers: {'x-voice-duration-ms': '$durationMs'},
+      );
+      debugPrint(
+        '[OneOneNudge][DART-02] Voice nudge upload accepted '
+        'audioBytes=${audio.length} elapsedMs=${stopwatch.elapsedMilliseconds} '
+        'eventId=${response['notificationEventId']} '
+        'targetDevices=${response['targetDevices']}',
+      );
+      return _requireAcceptedDelivery(response);
+    } catch (error) {
+      debugPrint(
+        '[OneOneNudge][DART-E1] Voice nudge upload failed '
+        'audioBytes=${audio.length} elapsedMs=${stopwatch.elapsedMilliseconds} '
+        '${error.runtimeType}: $error',
+      );
+      rethrow;
+    }
   }
 
   Future<Map<String, dynamic>> respond({

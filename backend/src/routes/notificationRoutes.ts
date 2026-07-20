@@ -2,6 +2,7 @@ import express, { Router } from "express";
 import { z } from "zod";
 import { requireFirebaseAuth, type AuthenticatedRequest } from "../firebase/auth.js";
 import { asyncHandler } from "../http/asyncHandler.js";
+import { logger } from "../logger.js";
 import {
   sendFriendLiveNotification,
   sendNudgeNotification
@@ -9,7 +10,7 @@ import {
 import {
   acknowledgeVoiceNudge,
   createVoiceNudge,
-  downloadVoiceNudge,
+  resolveVoiceNudgeAudioRedirect,
   sendRingNudge
 } from "../notifications/voiceNudgeService.js";
 import { maxVoiceNudgeBytes } from "../notifications/voiceNudgeValidation.js";
@@ -172,15 +173,27 @@ export function createNotificationRoutes() {
     asyncHandler(async (request, response) => {
       const eventId = z.string().min(1).parse(request.params.eventId);
       const token = request.header("x-one-one-delivery-token") ?? "";
-      const audio = await downloadVoiceNudge(eventId, token);
+      // Compatibility path for older clients: validate the delivery token,
+      // then 302 to a Cloud Storage signed URL so audio bytes never leave
+      // Storage through the API process.
+      const { signedUrl, deliveryId } = await resolveVoiceNudgeAudioRedirect(eventId, token);
+      logger.info(
+        {
+          checkpoint: "VOICE-NUDGE-BE-05",
+          category: "expected",
+          eventId,
+          deliveryId,
+          egress: "signed_url_redirect"
+        },
+        "voice nudge audio redirect issued to recipient device"
+      );
       response
-        .status(200)
+        .status(302)
         .set({
-          "content-type": "audio/mp4",
-          "cache-control": "private, no-store, max-age=0",
-          "content-length": String(audio.length)
+          location: signedUrl,
+          "cache-control": "private, no-store, max-age=0"
         })
-        .send(audio);
+        .end();
     })
   );
 

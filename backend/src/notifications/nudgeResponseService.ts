@@ -123,6 +123,7 @@ export async function respondToNudge(input: {
   logger.info(
     {
       checkpoint: "NUDGE-RESPONSE-BE-01",
+      category: "expected",
       eventId: input.eventId,
       action: input.action,
       snoozeMinutes,

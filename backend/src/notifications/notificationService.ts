@@ -220,6 +220,7 @@ async function enforceNudgeRateLimits(input: NudgeInput, now: number) {
     logger.warn(
       {
         checkpoint: "NUDGE-BE-W1",
+        category: "expected",
         reason: "group_limit",
         recentCount: recentGroupNudges.length,
         configuredLimit: config.NUDGE_RATE_LIMIT_MAX_PER_GROUP,
@@ -250,6 +251,7 @@ async function enforceNudgeRateLimits(input: NudgeInput, now: number) {
       logger.warn(
         {
           checkpoint: "NUDGE-BE-W2",
+          category: "expected",
           reason: "recipient_cooldown",
           retryAfterSeconds: config.NUDGE_RECIPIENT_COOLDOWN_SECONDS
         },
