@@ -1883,9 +1883,11 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
           // nudge is an occasional, deliberate "reach out" action, so it
           // gets a thumb-reachable spot near the screen's rim instead of
           // competing for space among the settings/status icons up top.
+          // Sit above the carousel's "+ create new group" dashed circle
+          // (200.h row, 72.w tile) plus the hint/copy block beneath it.
           Positioned(
             right: 0,
-            bottom: 108.h,
+            bottom: 230.h,
             child: SafeArea(
               child: Padding(
                 padding: EdgeInsets.only(right: 12.w),
