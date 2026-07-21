@@ -9,7 +9,9 @@ import {
 } from "../notifications/notificationService.js";
 import {
   acknowledgeVoiceNudge,
+  completeVoiceNudgeUpload,
   createVoiceNudge,
+  initiateVoiceNudgeUpload,
   resolveVoiceNudgeAudioRedirect,
   sendRingNudge
 } from "../notifications/voiceNudgeService.js";
@@ -36,6 +38,18 @@ const voiceNudgeQuerySchema = z.object({
   targetScope: z.enum(["single_friend", "all_friends"]),
   targetUserId: z.string().min(1).optional()
 });
+
+const voiceNudgeUploadSchema = z.discriminatedUnion("targetScope", [
+  z.object({
+    targetScope: z.literal("single_friend"),
+    targetUserId: z.string().min(1),
+    durationMs: z.number().int().positive()
+  }),
+  z.object({
+    targetScope: z.literal("all_friends"),
+    durationMs: z.number().int().positive()
+  })
+]);
 
 const ringNudgeSchema = z.object({
   targetScope: z.enum(["single_friend", "all_friends"]),
@@ -135,6 +149,41 @@ export function createNotificationRoutes() {
     })
   );
 
+  router.post(
+    "/v1/groups/:groupId/voice-nudges/uploads",
+    requireFirebaseAuth,
+    asyncHandler(async (request, response) => {
+      const authRequest = request as AuthenticatedRequest;
+      const groupId = z.string().min(1).parse(request.params.groupId);
+      const body = voiceNudgeUploadSchema.parse(request.body);
+      const result = await initiateVoiceNudgeUpload({
+        groupId,
+        senderUserId: authRequest.auth.uid,
+        targetScope: body.targetScope,
+        targetUserId: "targetUserId" in body ? body.targetUserId : undefined,
+        durationMs: body.durationMs
+      });
+      response.status(201).json(result);
+    })
+  );
+
+  router.post(
+    "/v1/groups/:groupId/voice-nudges/:eventId/complete",
+    requireFirebaseAuth,
+    asyncHandler(async (request, response) => {
+      const authRequest = request as AuthenticatedRequest;
+      const groupId = z.string().min(1).parse(request.params.groupId);
+      const eventId = z.string().min(1).parse(request.params.eventId);
+      const result = await completeVoiceNudgeUpload({
+        groupId,
+        eventId,
+        senderUserId: authRequest.auth.uid
+      });
+      response.status(200).json(result);
+    })
+  );
+
+  // Legacy: raw audio through the API. Prefer /voice-nudges/uploads + /complete.
   router.post(
     "/v1/groups/:groupId/voice-nudges",
     requireFirebaseAuth,

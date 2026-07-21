@@ -25,10 +25,15 @@ sequenceDiagram
   participant Native as Recipient Android (VoiceNudgePlaybackService)
 
   Sender->>Sender: Record up to 6s AAC/M4A (mic)
-  Sender->>API: POST /v1/groups/{groupId}/voice-nudges (raw audio/mp4 bytes, <=96KB)
-  API->>GCS: file.save() -> voiceNudges/{eventId}.m4a  [RAW FILE WRITE]
+  Sender->>API: POST /v1/groups/{groupId}/voice-nudges/uploads (JSON metadata)
+  API->>API: createVoiceNudgeSignedWriteUrl() (V4 write, short TTL)
+  API->>RTDB: write notificationEvents + voiceNudges (awaiting_upload)
+  API-->>Sender: uploadUrl + requiredHeaders
+  Sender->>GCS: PUT audio/mp4 via signed write URL  [RAW FILE WRITE — client→GCS]
+  Sender->>API: POST /v1/groups/{groupId}/voice-nudges/{eventId}/complete
+  API->>GCS: exists + metadata + 12-byte ftyp check (no full-file download)
   API->>API: createVoiceNudgeSignedReadUrl() (V4, TTL = media expiry)
-  API->>RTDB: write notificationEvents + voiceNudges metadata (paths, tokens, TTL)
+  API->>RTDB: deliveries metadata
   API->>FCM: data-only push (signed audioUrl + ackUrl + deliveryToken)
   FCM->>Native: onMessageReceived (data payload)
   Native->>GCS: GET signed audioUrl  [RAW FILE READ -> Cloud Storage egress ONLY]
@@ -40,11 +45,13 @@ sequenceDiagram
 
 | Hop | What actually moves | Where |
 |---|---|---|
-| Sender app → backend | **Raw audio bytes** (`audio/mp4`, ≤96KB, ≤6s) | `nudge_repository.dart` → `POST /v1/groups/:groupId/voice-nudges` |
-| Backend → Cloud Storage | **Raw file write** | `voiceNudgeService.ts: createVoiceNudge` (`file.save`) |
-| Backend → FCM → recipient | **Signed URL reference** (`audioUrl`) + `ackUrl` + opaque `deliveryToken`; no audio bytes in the push | `voiceNudgeService.ts: createVoiceNudge` |
+| Sender app → backend | Tiny JSON (duration + target); **no audio bytes** | `nudge_repository.dart` → `POST .../voice-nudges/uploads` then `.../complete` |
+| Sender app → Cloud Storage | **Raw audio bytes** (`audio/mp4`, ≤96KB, ≤6s) via V4 signed write URL | `ApiClient.putBytesToUrl` |
+| Backend → Cloud Storage (verify) | Object metadata + **12-byte** header read only | `verifyClientUploadedVoiceObject` |
+| Backend → FCM → recipient | **Signed URL reference** (`audioUrl`) + `ackUrl` + opaque `deliveryToken`; no audio bytes in the push | `voiceNudgeService.ts: dispatchVoiceNudge` |
 | Recipient → Cloud Storage | **Raw file download** via V4 signed URL | `VoiceNudgePlaybackService.kt: downloadAudio` |
 | Recipient → backend | Tiny ACK JSON only | `POST /v1/voice-nudges/:eventId/ack` |
+| Legacy: sender → backend raw POST | Audio still proxied through API (`uploadMode: backend_proxy`) | `POST /v1/groups/:groupId/voice-nudges` |
 | Legacy: recipient → backend `/audio` | **302 redirect** to a fresh signed URL (no audio body) | `resolveVoiceNudgeAudioRedirect` |
 
 Audio is **never** placed in Realtime Database and is **never** base64-encoded.
@@ -95,8 +102,9 @@ signed URL.
 
 | Checkpoint | Level | Meaning |
 |---|---|---|
-| `VOICE-NUDGE-BE-01` | info | Upload accepted, about to write to Cloud Storage |
-| `VOICE-NUDGE-BE-02` | info | Audio stored in Cloud Storage |
+| `VOICE-NUDGE-BE-01` | info | Signed write URL issued (`uploadMode: signed_write_url`) or legacy proxy upload accepted |
+| `VOICE-NUDGE-BE-02` | info | Audio verified/stored in Cloud Storage |
+| `VOICE-NUDGE-BE-02A` | info | Client upload verified (metadata + 12-byte ftyp) |
 | `VOICE-NUDGE-BE-03` | info | Dispatched via FCM with `deliveryMode: "signed_url"` |
 | `VOICE-NUDGE-BE-04` | info | Compatibility path: signed URL issued for redirect |
 | `VOICE-NUDGE-BE-05` | info | Compatibility path: 302 redirect response sent |
@@ -122,15 +130,18 @@ Frontend upload logs: `[OneOneNudge][DART-01/02/E1]` in `nudge_repository.dart`.
   header and handles redirects safely.
 - [ ] **Ship backend + Android APK** and confirm Cloud Storage bandwidth
   continues while server outbound for voice audio drops.
-- [ ] **Correlate logs** after deploy (`deliveryMode: "signed_url"`, rare
-  `signed_url_redirect` only from older clients).
+- [ ] **Correlate logs** after deploy (`uploadMode: "signed_write_url"`,
+  `deliveryMode: "signed_url"`, rare `signed_url_redirect` / `backend_proxy`
+  only from older clients).
 
 ### Fix options status
 
 1. **Stream instead of buffer** — superseded: proxy path removed; no audio
    buffer through Express for playback.
 2. **Signed URL to recipient** — **implemented**.
-3. **Cache at the backend** — not needed for playback after signed URLs
+3. **Signed write URL from sender** — **implemented** (`/uploads` +
+   `/complete`); legacy raw POST kept for older APKs.
+4. **Cache at the backend** — not needed for playback after signed URLs
    (backend no longer downloads the object for delivery). Multi-recipient
    still means N GCS downloads (one per device); that is correct and minimal.
 

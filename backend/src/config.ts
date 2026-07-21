@@ -22,6 +22,18 @@ const envSchema = z.object({
   NUDGE_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().min(10).max(3600).default(600),
   NUDGE_RATE_LIMIT_MAX_PER_GROUP: z.coerce.number().int().min(1).max(300).default(30),
   NUDGE_RECIPIENT_COOLDOWN_SECONDS: z.coerce.number().int().min(0).max(300).default(5),
+  // Per-type cooldowns: how long a sender must wait before sending *another*
+  // nudge of the same type (regardless of recipient). Independent from the
+  // recipient-specific and group-wide limiters above so each nudge type can
+  // be tuned without affecting the others.
+  NUDGE_COOLDOWN_RING_SECONDS: z.coerce.number().int().min(0).max(600).default(20),
+  NUDGE_COOLDOWN_VOICE_SECONDS: z.coerce.number().int().min(0).max(600).default(60),
+  NUDGE_COOLDOWN_PUSH_SECONDS: z.coerce.number().int().min(0).max(600).default(10),
+  // Anti-spam guard: caps the total number of nudges (any type) a single
+  // sender can fire within a short rolling window, independent of the
+  // longer-lived NUDGE_RATE_LIMIT_WINDOW_SECONDS burst guard above.
+  NUDGE_SPAM_WINDOW_SECONDS: z.coerce.number().int().min(10).max(3600).default(300),
+  NUDGE_SPAM_MAX_PER_WINDOW: z.coerce.number().int().min(1).max(300).default(10),
   SUBSCRIPTION_REDEEM_CODE_HASHES: z.string().optional(),
   CORS_ORIGINS: z.string().optional()
 });

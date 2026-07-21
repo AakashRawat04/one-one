@@ -65,31 +65,76 @@ class NudgeRepository {
     return _requireAcceptedDelivery(response);
   }
 
+  /// Direct-to-GCS upload via signed write URL, then backend finalize/FCM.
   Future<Map<String, dynamic>> sendVoice({
     required String groupId,
     required NudgeTarget target,
     required Uint8List audio,
     required int durationMs,
   }) async {
-    final query = Uri(queryParameters: target.query).query;
     final stopwatch = Stopwatch()..start();
     debugPrint(
-      '[OneOneNudge][DART-01] Uploading voice nudge '
+      '[OneOneNudge][DART-01] Requesting voice nudge signed write URL '
       'audioBytes=${audio.length} durationMs=$durationMs '
       'targetScope=${target.targetScope}',
     );
     try {
-      final response = await _apiClient.postBytes(
-        '/v1/groups/$groupId/voice-nudges?$query',
+      final upload = await _apiClient.postJson(
+        '/v1/groups/$groupId/voice-nudges/uploads',
+        {
+          ...target.json,
+          'durationMs': durationMs,
+        },
+      );
+      final eventId = upload['notificationEventId']?.toString();
+      final uploadUrl = upload['uploadUrl']?.toString();
+      if (eventId == null ||
+          eventId.isEmpty ||
+          uploadUrl == null ||
+          uploadUrl.isEmpty) {
+        throw const ApiException(
+          statusCode: 500,
+          code: 'voice_nudge_upload_url_invalid',
+          message: 'Backend did not return a usable signed write URL.',
+        );
+      }
+
+      final requiredHeaders = <String, String>{};
+      final rawHeaders = upload['requiredHeaders'];
+      if (rawHeaders is Map) {
+        rawHeaders.forEach((key, value) {
+          requiredHeaders[key.toString()] = value.toString();
+        });
+      }
+      if (!requiredHeaders.containsKey('content-type')) {
+        requiredHeaders['content-type'] =
+            upload['contentType']?.toString() ?? 'audio/mp4';
+      }
+
+      debugPrint(
+        '[OneOneNudge][DART-01B] Uploading voice nudge directly to Cloud Storage '
+        'eventId=$eventId audioBytes=${audio.length}',
+      );
+      await _apiClient.putBytesToUrl(
+        uploadUrl,
         audio,
-        contentType: 'audio/mp4',
-        headers: {'x-voice-duration-ms': '$durationMs'},
+        headers: requiredHeaders,
+      );
+
+      debugPrint(
+        '[OneOneNudge][DART-01C] Completing voice nudge after GCS upload '
+        'eventId=$eventId elapsedMs=${stopwatch.elapsedMilliseconds}',
+      );
+      final response = await _apiClient.postJson(
+        '/v1/groups/$groupId/voice-nudges/$eventId/complete',
+        const {},
       );
       debugPrint(
         '[OneOneNudge][DART-02] Voice nudge upload accepted '
         'audioBytes=${audio.length} elapsedMs=${stopwatch.elapsedMilliseconds} '
-        'eventId=${response['notificationEventId']} '
-        'targetDevices=${response['targetDevices']}',
+        'eventId=${response['notificationEventId'] ?? eventId} '
+        'targetDevices=${response['targetDevices']} '
+        'uploadMode=signed_write_url',
       );
       return _requireAcceptedDelivery(response);
     } catch (error) {

@@ -84,6 +84,29 @@ class ApiClient {
     }
     return responseBody;
   }
+
+  /// PUT bytes to an absolute URL (e.g. Cloud Storage signed write URL).
+  /// Does not attach Firebase Auth — the signed URL is the credential.
+  Future<void> putBytesToUrl(
+    String absoluteUrl,
+    List<int> bytes, {
+    required Map<String, String> headers,
+  }) async {
+    final response = await _httpClient.put(
+      Uri.parse(absoluteUrl),
+      headers: headers,
+      body: bytes,
+    );
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw ApiException(
+        statusCode: response.statusCode,
+        code: 'storage_upload_failed',
+        message: response.body.isEmpty
+            ? 'Cloud Storage upload failed with HTTP ${response.statusCode}'
+            : response.body,
+      );
+    }
+  }
 }
 
 class ApiException implements Exception {

@@ -13,6 +13,7 @@ import {
 } from "../groups/groupService.js";
 import { HttpError } from "../http/httpError.js";
 import { logger } from "../logger.js";
+import { enforceNudgeRateLimits } from "./nudgeRateLimiter.js";
 
 export type FriendLiveInput = {
   groupId: string;
@@ -144,13 +145,17 @@ export async function sendNudgeNotification(input: NudgeInput) {
   }
 
   const now = nowSeconds();
-  await enforceNudgeRateLimits(input, now);
-
-  const senderName = await readDisplayName(input.senderUserId);
   const recipientUserIds =
     input.targetScope === "single_friend"
       ? [input.targetUserId!].filter((userId) => userId !== input.senderUserId)
       : await activeRecipientUserIds(input.groupId, input.senderUserId);
+  await enforceNudgeRateLimits({
+    groupId: input.groupId,
+    senderUserId: input.senderUserId,
+    eventType: "nudge",
+    targetUserIds: recipientUserIds
+  });
+  const senderName = await readDisplayName(input.senderUserId);
   const recipientDevices = await collectRecipientDevices(recipientUserIds);
   const notificationEventId = await createNotificationEvent({
     groupId: input.groupId,
@@ -195,75 +200,6 @@ export async function sendNudgeNotification(input: NudgeInput) {
     failed: pushResult.failureCount,
     skipped: recipientUserIds.length === 0 ? 1 : 0
   };
-}
-
-async function enforceNudgeRateLimits(input: NudgeInput, now: number) {
-  const snapshot = await getRealtimeDatabase().ref(`notificationEvents/${input.groupId}`).get();
-  const recentGroupNudges = !snapshot.exists() || !isRecord(snapshot.val())
-    ? []
-    : Object.values(snapshot.val() as Record<string, unknown>)
-        .filter(isNotificationEvent)
-        .filter((event) => {
-          return (
-            event.senderUserId === input.senderUserId &&
-            ["nudge", "ring_nudge", "voice_nudge"].includes(event.eventType) &&
-            event.createdAt >= now - config.NUDGE_RATE_LIMIT_WINDOW_SECONDS
-          );
-        });
-
-  if (recentGroupNudges.length >= config.NUDGE_RATE_LIMIT_MAX_PER_GROUP) {
-    const oldestCreatedAt = Math.min(...recentGroupNudges.map((event) => event.createdAt));
-    const retryAfterSeconds = Math.max(
-      1,
-      oldestCreatedAt + config.NUDGE_RATE_LIMIT_WINDOW_SECONDS - now
-    );
-    logger.warn(
-      {
-        checkpoint: "NUDGE-BE-W1",
-        category: "expected",
-        reason: "group_limit",
-        recentCount: recentGroupNudges.length,
-        configuredLimit: config.NUDGE_RATE_LIMIT_MAX_PER_GROUP,
-        retryAfterSeconds
-      },
-      "nudge request rate limited before FCM send"
-    );
-    throw new HttpError(
-      429,
-      "nudge_rate_limited",
-      `Nudge limit reached. Try again in ${retryAfterSeconds} seconds.`
-    );
-  }
-
-  if (
-    config.NUDGE_RECIPIENT_COOLDOWN_SECONDS > 0 &&
-    input.targetScope === "single_friend" &&
-    input.targetUserId
-  ) {
-    const recentSameRecipient = recentGroupNudges.some((event) => {
-      return (
-        event.createdAt >= now - config.NUDGE_RECIPIENT_COOLDOWN_SECONDS &&
-        event.targetUserIds.includes(input.targetUserId!)
-      );
-    });
-
-    if (recentSameRecipient) {
-      logger.warn(
-        {
-          checkpoint: "NUDGE-BE-W2",
-          category: "expected",
-          reason: "recipient_cooldown",
-          retryAfterSeconds: config.NUDGE_RECIPIENT_COOLDOWN_SECONDS
-        },
-        "nudge request rate limited before FCM send"
-      );
-      throw new HttpError(
-        429,
-        "nudge_rate_limited",
-        `Please wait ${config.NUDGE_RECIPIENT_COOLDOWN_SECONDS} seconds before nudging this friend again.`
-      );
-    }
-  }
 }
 
 async function activeRecipientUserIds(groupId: string, senderUserId: string) {

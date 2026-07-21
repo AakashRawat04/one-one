@@ -88,7 +88,10 @@ export function isPermanentMessagingTargetError(error: unknown) {
   const code = String(error.code);
   return (
     code === "messaging/registration-token-not-registered" ||
-    code === "messaging/invalid-registration-token"
+    code === "messaging/invalid-registration-token" ||
+    // FID-based sends (current Android installs) use this code when the
+    // Installation ID is gone or revoked — clear it so we stop retrying.
+    code === "messaging/installation-id-not-registered"
   );
 }
 
