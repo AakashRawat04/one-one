@@ -49,21 +49,37 @@ Endpoints:
 POST /v1/groups
 POST /v1/groups/:groupId/invites
 POST /v1/invites/join
+GET  /invite/:inviteCode
+GET  /.well-known/assetlinks.json
 POST /v1/livekit/token
 POST /v1/groups/:groupId/notifications/friend-live
 POST /v1/groups/:groupId/nudges
 POST /v1/groups/:groupId/ring-nudges
+POST /v1/groups/:groupId/voice-nudges/uploads
+POST /v1/groups/:groupId/voice-nudges/:eventId/complete
 POST /v1/groups/:groupId/voice-nudges
 GET  /v1/voice-nudges/:eventId/audio
 POST /v1/voice-nudges/:eventId/ack
 POST /v1/subscriptions/redeem
 ```
 
-The voice-nudge upload endpoint accepts an authenticated `audio/mp4` body of
-at most 96 KiB, `x-voice-duration-ms`, and the `targetScope` / optional
-`targetUserId` query parameters. Download and acknowledgement requests are
-authorized by the short-lived per-device token delivered through FCM; they do
-not use Firebase Auth because they must work before Flutter starts.
+Voice nudges use signed URLs end to end:
+
+1. `POST .../voice-nudges/uploads` (JSON: `targetScope`, optional
+   `targetUserId`, `durationMs`) returns a short-lived Cloud Storage V4
+   **write** URL plus required headers. The client PUTs `audio/mp4` (≤96 KiB)
+   directly to Storage — raw audio never enters the API process.
+2. `POST .../voice-nudges/:eventId/complete` verifies the object (size + M4A
+   header only), mints a V4 **read** URL, and dispatches FCM.
+3. Legacy `POST .../voice-nudges` still accepts an authenticated `audio/mp4`
+   body for older clients; prefer the uploads/complete flow.
+
+FCM delivers a short-lived Cloud Storage signed `audioUrl` so recipients
+download audio directly from Storage (no backend audio proxy).
+`GET /v1/voice-nudges/:eventId/audio` remains as a compatibility redirect
+(302) to a fresh signed URL for older clients. Acknowledgement requests are
+authorized by the short-lived per-device token delivered through FCM; they
+do not use Firebase Auth because they must work before Flutter starts.
 
 Set `FIREBASE_STORAGE_BUCKET` and `PUBLIC_API_BASE_URL` in production. Add a
 Cloud Storage lifecycle rule that removes objects under `voiceNudges/` after
@@ -74,6 +90,13 @@ recipient has played the nudge.
 SHA-256 hashes in `SUBSCRIPTION_REDEEM_CODE_HASHES`, then grants the authenticated
 Firebase user the `oneOneDeveloper` access claim. Plaintext codes must never be
 stored in the repository or deployment environment.
+
+Group invite creation returns both `inviteCode` and `inviteUrl`. Configure
+`PUBLIC_INVITE_BASE_URL` with the public HTTPS `/invite` base and
+`ANDROID_APP_LINK_SHA256_CERT_FINGERPRINTS` with comma-separated Play/internal
+SHA-256 signing fingerprints. The public invite endpoint redirects to the
+installed Android app as a fallback; `assetlinks.json` enables direct verified
+App Link opening.
 
 ## Build
 

@@ -3,8 +3,10 @@ package app.oneone.one_one_app
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
+import android.media.AudioAttributes as PlatformAudioAttributes
+import android.media.AudioFormat
 import android.media.AudioManager
-import android.media.ToneGenerator
+import android.media.AudioTrack
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
@@ -24,6 +26,8 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.ArrayDeque
 import java.util.concurrent.Executors
+import kotlin.math.PI
+import kotlin.math.sin
 
 class VoiceNudgePlaybackService : Service() {
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -31,7 +35,7 @@ class VoiceNudgePlaybackService : Service() {
     private val queue = ArrayDeque<NudgeRequest>()
     private var active: NudgeRequest? = null
     private var player: ExoPlayer? = null
-    private var toneGenerator: ToneGenerator? = null
+    private var ringTrack: AudioTrack? = null
     private var playbackWakeLock: PowerManager.WakeLock? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -49,7 +53,15 @@ class VoiceNudgePlaybackService : Service() {
         )
         startForeground(
             VoiceNudgeNotifications.idFor(request.eventId),
-            VoiceNudgeNotifications.build(this, request.senderName, "Preparing nudge…", true),
+            VoiceNudgeNotifications.build(
+                this,
+                request.eventId,
+                request.groupId,
+                request.responseUrl,
+                request.senderName,
+                "Preparing nudge…",
+                true,
+            ),
         )
         if (active?.eventId != request.eventId && queue.none { it.eventId == request.eventId }) {
             queue.add(request)
@@ -89,14 +101,76 @@ class VoiceNudgePlaybackService : Service() {
                 VoiceNudgeDiagnostics.tag,
                 "[FCM-12] Starting ring durationMs=${request.durationMs}",
             )
-            toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, 90).also {
-                it.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, request.durationMs.toInt())
+            val samples = buildNudgeRing(request.durationMs)
+            val attributes = PlatformAudioAttributes.Builder()
+                .setUsage(PlatformAudioAttributes.USAGE_ALARM)
+                .setContentType(PlatformAudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build()
+            val format = AudioFormat.Builder()
+                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                .setSampleRate(ringSampleRate)
+                .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                .build()
+            @Suppress("DEPRECATION")
+            ringTrack = AudioTrack(
+                attributes,
+                format,
+                samples.size * 2,
+                AudioTrack.MODE_STATIC,
+                AudioManager.AUDIO_SESSION_ID_GENERATE,
+            ).also { track ->
+                val written = track.write(samples, 0, samples.size)
+                check(written == samples.size) {
+                    "Nudge ring buffer write failed: $written/${samples.size} samples"
+                }
+                track.setVolume(0.86f)
+                track.play()
             }
+            // The PCM buffer itself is exactly the requested length. This
+            // callback owns service and notification cleanup at that boundary.
             mainHandler.postDelayed({ finishActive(success = true) }, request.durationMs)
         } catch (error: RuntimeException) {
             VoiceNudgeDiagnostics.logFailure("[FCM-E4] Ring playback", error)
             finishActive(success = false)
         }
+    }
+
+    /**
+     * Builds One One's own ring instead of delegating to the phone ringtone.
+     * Each phrase is two short rising chimes followed by breathing space.
+     */
+    private fun buildNudgeRing(durationMs: Long): ShortArray {
+        val sampleCount = ((durationMs * ringSampleRate) / 1_000L).toInt()
+        return ShortArray(sampleCount) { sampleIndex ->
+            val elapsedMs = sampleIndex * 1_000.0 / ringSampleRate
+            val phraseMs = elapsedMs % ringPhraseMs
+            val pulse = when {
+                phraseMs < 190.0 -> RingPulse(phraseMs, 190.0, 784.0, 1_176.0)
+                phraseMs >= 250.0 && phraseMs < 520.0 ->
+                    RingPulse(phraseMs - 250.0, 270.0, 988.0, 1_482.0)
+                else -> null
+            }
+            if (pulse == null) {
+                0
+            } else {
+                val phraseEnvelope = pulseEnvelope(pulse.elapsedMs, pulse.durationMs)
+                val finalFade = ((durationMs - elapsedMs) / 45.0).coerceIn(0.0, 1.0)
+                val envelope = phraseEnvelope * finalFade
+                val seconds = elapsedMs / 1_000.0
+                val fundamental = sin(2.0 * PI * pulse.frequencyHz * seconds)
+                val harmonic = sin(2.0 * PI * pulse.harmonicHz * seconds) * 0.24
+                ((fundamental + harmonic) * envelope * Short.MAX_VALUE * 0.56)
+                    .toInt()
+                    .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+                    .toShort()
+            }
+        }
+    }
+
+    private fun pulseEnvelope(elapsedMs: Double, durationMs: Double): Double {
+        val attack = (elapsedMs / 18.0).coerceIn(0.0, 1.0)
+        val release = ((durationMs - elapsedMs) / 55.0).coerceIn(0.0, 1.0)
+        return attack * release
     }
 
     private fun downloadAndPlay(request: NudgeRequest) {
@@ -116,42 +190,68 @@ class VoiceNudgePlaybackService : Service() {
     }
 
     private fun downloadAudio(request: NudgeRequest): File {
-        val audioUrl = requireNotNull(request.audioUrl) { "Missing audio URL" }
-        val deliveryToken = requireNotNull(request.deliveryToken) { "Missing delivery token" }
-        val connection = URL(audioUrl).openConnection() as HttpURLConnection
-        connection.connectTimeout = 8_000
-        connection.readTimeout = 8_000
-        connection.requestMethod = "GET"
-        connection.setRequestProperty("x-one-one-delivery-token", deliveryToken)
-        connection.setRequestProperty("accept", "audio/mp4")
-        try {
-            val responseCode = connection.responseCode
-            Log.i(
-                VoiceNudgeDiagnostics.tag,
-                "[FCM-13A] Voice audio HTTP response=$responseCode",
-            )
-            if (responseCode !in 200..299) {
-                throw IllegalStateException("Audio download failed with HTTP $responseCode")
-            }
-            val output = File(cacheDir, "voice_nudge_${request.eventId.safeFileName()}.m4a")
-            connection.inputStream.use { input ->
-                FileOutputStream(output).use { sink ->
-                    val buffer = ByteArray(8 * 1024)
-                    var total = 0
-                    while (true) {
-                        val count = input.read(buffer)
-                        if (count < 0) break
-                        total += count
-                        if (total > maxAudioBytes) throw IllegalStateException("Voice nudge is too large")
-                        sink.write(buffer, 0, count)
-                    }
-                    if (total == 0) throw IllegalStateException("Voice nudge is empty")
+        var currentUrl = requireNotNull(request.audioUrl) { "Missing audio URL" }
+        var redirects = 0
+        while (true) {
+            val connection = URL(currentUrl).openConnection() as HttpURLConnection
+            // Manual redirects so the delivery-token header is never forwarded
+            // to Cloud Storage signed URLs (would break V4 signature checks).
+            connection.instanceFollowRedirects = false
+            connection.connectTimeout = 8_000
+            connection.readTimeout = 8_000
+            connection.requestMethod = "GET"
+            connection.setRequestProperty("accept", "audio/mp4")
+            if (isBackendAudioProxyUrl(currentUrl)) {
+                val deliveryToken = requireNotNull(request.deliveryToken) {
+                    "Missing delivery token"
                 }
+                connection.setRequestProperty("x-one-one-delivery-token", deliveryToken)
             }
-            return output
-        } finally {
-            connection.disconnect()
+            try {
+                val responseCode = connection.responseCode
+                Log.i(
+                    VoiceNudgeDiagnostics.tag,
+                    "[FCM-13A] Voice audio HTTP response=$responseCode",
+                )
+                if (responseCode in 300..399) {
+                    val location = connection.getHeaderField("Location")
+                        ?: throw IllegalStateException("Audio redirect missing Location")
+                    if (redirects >= 3) {
+                        throw IllegalStateException("Too many audio download redirects")
+                    }
+                    currentUrl = location
+                    redirects += 1
+                    continue
+                }
+                if (responseCode !in 200..299) {
+                    throw IllegalStateException("Audio download failed with HTTP $responseCode")
+                }
+                val output = File(cacheDir, "voice_nudge_${request.eventId.safeFileName()}.m4a")
+                connection.inputStream.use { input ->
+                    FileOutputStream(output).use { sink ->
+                        val buffer = ByteArray(8 * 1024)
+                        var total = 0
+                        while (true) {
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            total += count
+                            if (total > maxAudioBytes) {
+                                throw IllegalStateException("Voice nudge is too large")
+                            }
+                            sink.write(buffer, 0, count)
+                        }
+                        if (total == 0) throw IllegalStateException("Voice nudge is empty")
+                    }
+                }
+                return output
+            } finally {
+                connection.disconnect()
+            }
         }
+    }
+
+    private fun isBackendAudioProxyUrl(url: String): Boolean {
+        return url.contains("/v1/voice-nudges/") && url.contains("/audio")
     }
 
     private fun startPlayer(request: NudgeRequest, file: File) {
@@ -237,24 +337,46 @@ class VoiceNudgePlaybackService : Service() {
         releasePlayback()
         active = null
         val manager = getSystemService(NotificationManager::class.java)
-        if (!success) {
-            manager.notify(
-                VoiceNudgeNotifications.idFor(request.eventId),
-                VoiceNudgeNotifications.build(this, request.senderName, "Nudge could not be played", false),
-            )
-        } else {
-            manager.cancel(VoiceNudgeNotifications.idFor(request.eventId))
+        val finalStatus = when {
+            !success -> "Nudge could not be played"
+            request.kind == VoiceNudgeContract.kindRing ->
+                "${request.durationMs / 1000}-second ring received"
+            else -> "Voice nudge received"
         }
         if (queue.isEmpty()) {
             releaseWakeLock()
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopForeground(STOP_FOREGROUND_DETACH)
             } else {
                 @Suppress("DEPRECATION")
-                stopForeground(true)
+                stopForeground(false)
             }
+            manager.notify(
+                VoiceNudgeNotifications.idFor(request.eventId),
+                VoiceNudgeNotifications.build(
+                    this,
+                    request.eventId,
+                    request.groupId,
+                    request.responseUrl,
+                    request.senderName,
+                    finalStatus,
+                    false,
+                ),
+            )
             stopSelf()
         } else {
+            manager.notify(
+                VoiceNudgeNotifications.idFor(request.eventId),
+                VoiceNudgeNotifications.build(
+                    this,
+                    request.eventId,
+                    request.groupId,
+                    request.responseUrl,
+                    request.senderName,
+                    finalStatus,
+                    false,
+                ),
+            )
             processNext()
         }
     }
@@ -262,9 +384,13 @@ class VoiceNudgePlaybackService : Service() {
     private fun releasePlayback() {
         player?.release()
         player = null
-        toneGenerator?.stopTone()
-        toneGenerator?.release()
-        toneGenerator = null
+        try {
+            ringTrack?.stop()
+        } catch (_: IllegalStateException) {
+            // A completed static track may already be stopped.
+        }
+        ringTrack?.release()
+        ringTrack = null
     }
 
     private fun holdWakeLock() {
@@ -299,7 +425,15 @@ class VoiceNudgePlaybackService : Service() {
         val manager = getSystemService(NotificationManager::class.java)
         manager.notify(
             VoiceNudgeNotifications.idFor(request.eventId),
-            VoiceNudgeNotifications.build(this, request.senderName, status, true),
+            VoiceNudgeNotifications.build(
+                this,
+                request.eventId,
+                request.groupId,
+                request.responseUrl,
+                request.senderName,
+                status,
+                true,
+            ),
         )
     }
 
@@ -307,7 +441,13 @@ class VoiceNudgePlaybackService : Service() {
         val kind = getStringExtra(VoiceNudgeContract.extraKind) ?: return null
         val eventId = getStringExtra(VoiceNudgeContract.extraEventId) ?: return null
         val senderName = getStringExtra(VoiceNudgeContract.extraSenderName) ?: "Someone"
-        val durationMs = getLongExtra(VoiceNudgeContract.extraDurationMs, 0).coerceIn(250, 10_000)
+        val suppliedDurationMs = getLongExtra(VoiceNudgeContract.extraDurationMs, 0)
+        val durationMs = if (kind == VoiceNudgeContract.kindRing) {
+            suppliedDurationMs.takeIf { it in supportedRingDurationsMs } ?: return null
+        } else {
+            suppliedDurationMs.coerceIn(250, 10_000)
+        }
+        val groupId = getStringExtra(VoiceNudgeContract.extraGroupId) ?: return null
         return NudgeRequest(
             kind = kind,
             eventId = eventId,
@@ -316,6 +456,8 @@ class VoiceNudgePlaybackService : Service() {
             audioUrl = getStringExtra(VoiceNudgeContract.extraAudioUrl),
             ackUrl = getStringExtra(VoiceNudgeContract.extraAckUrl),
             deliveryToken = getStringExtra(VoiceNudgeContract.extraDeliveryToken),
+            groupId = groupId,
+            responseUrl = getStringExtra(VoiceNudgeContract.extraResponseUrl),
         )
     }
 
@@ -329,9 +471,21 @@ class VoiceNudgePlaybackService : Service() {
         val audioUrl: String?,
         val ackUrl: String?,
         val deliveryToken: String?,
+        val groupId: String,
+        val responseUrl: String?,
+    )
+
+    private data class RingPulse(
+        val elapsedMs: Double,
+        val durationMs: Double,
+        val frequencyHz: Double,
+        val harmonicHz: Double,
     )
 
     companion object {
+        private const val ringSampleRate = 44_100
+        private const val ringPhraseMs = 900.0
+        private val supportedRingDurationsMs = setOf(3_000L, 5_000L, 10_000L)
         private const val maxAudioBytes = 128 * 1024
         private const val maxWakeLockDurationMs = 30_000L
     }

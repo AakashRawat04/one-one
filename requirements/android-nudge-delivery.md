@@ -5,22 +5,36 @@
 1. Flutter records a maximum six-second AAC/M4A voice nudge and uploads it to
    the authenticated backend.
 2. The backend stores it privately in Firebase Storage, creates one opaque
-   delivery token per active Android device, and sends a high-priority,
-   data-only FCM message.
+   delivery token per active Android device, issues a short-lived Cloud Storage
+   signed read URL for the object, and sends a high-priority, data-only FCM
+   message containing that signed `audioUrl` (plus `ackUrl` / delivery token).
 3. `VoiceNudgeMessagingService` starts `VoiceNudgePlaybackService`. The
-   foreground service holds a bounded CPU wake lock, downloads and plays the
-   recording without starting Flutter, then acknowledges completion.
+   foreground service holds a bounded CPU wake lock, downloads the recording
+   directly from Cloud Storage (signed URL), plays it without starting Flutter,
+   then acknowledges completion to the backend. Older clients that still call
+   `GET /v1/voice-nudges/:eventId/audio` receive a 302 redirect to a signed URL
+   instead of a proxied audio body.
 4. The backend deletes the Storage object after every intended recipient has
    played it. Media expires after ten minutes when accessed; a bucket lifecycle
    rule is the final cleanup safety net.
 
 The same native service produces the three-, five-, and ten-second Ring nudge.
-Ordinary Push nudges continue to use an FCM notification payload.
+Ordinary Push nudges now use the same high-priority data path so Android can
+render Accept, Snooze (5 or 15 minutes), and Decline actions consistently in
+every app state.
 
-Foreground Push notifications are displayed explicitly by the native messaging
-service. In the background or after removal from Recents, Android displays the
-notification payload. Ring and Voice use high-priority data messages in all
-three states so the native playback service can run without Flutter.
+Push notifications are displayed explicitly by the native messaging service in
+every state. Ring and Voice use high-priority data messages so the native
+playback service can run without Flutter. Their foreground-service notification
+is detached and replaced with an actionable, auto-cancel notification after
+playback, so it remains in Notification Center.
+
+Timed rings use an app-owned, repeating two-chime PCM pattern rather than the
+device's call ringtone. A complete 44.1 kHz mono buffer is generated for the
+selected 3/5/10-second duration, so the audible cue itself ends at the requested
+boundary; service cleanup uses that same deadline. The `voice_nudges` notification channel stays
+silent because the foreground service owns voice/ring playback; using a channel
+sound would create a second, duration-uncontrolled sound.
 
 ## Required backend configuration
 
@@ -77,8 +91,9 @@ Use two physical Android devices signed into different group members:
 1. Open both apps once and confirm each `userDevices` record contains an
    `fcmToken` and `platform: android`. For new installs, the compatibility-named
    `fcmToken` field contains the registered Firebase Installation ID.
-2. Lock the receiver, send a three-second Ring nudge, and confirm playback plus
-   the foreground notification.
+2. Lock the receiver and send 3-, 5-, and 10-second Ring nudges. Confirm the
+   sound is One One's two-chime pattern (not the call ringtone), measure each
+   from audible start to stop, and confirm it matches the selected duration.
 3. Swipe the receiver from Recents, send a Voice nudge, and confirm it downloads
    and plays without opening Flutter.
 4. Confirm the delivery progresses through `sent`, `downloaded`, and `played`,

@@ -44,12 +44,22 @@ Use RevenueCat **public platform SDK keys**, not secret REST API keys:
 
 ```sh
 flutter run \
+  --dart-define=ONE_ONE_BUILD_AUDIENCE=internal \
   --dart-define=ONE_ONE_REVENUECAT_ANDROID_API_KEY=goog_xxx \
   --dart-define=ONE_ONE_REVENUECAT_APPLE_API_KEY=appl_xxx
 ```
 
 The Firebase UID is used as the RevenueCat App User ID, preserving access
 across reinstalls and devices for the same signed-in account.
+
+`ONE_ONE_BUILD_AUDIENCE` is a compile-time safety boundary:
+
+- `internal`: may show redeem UI only when Remote Config also enables it;
+- `public`: never shows or honors developer bypass access.
+
+The default is `public`, including for missing or misspelled values. Production
+CI should still pass `public` explicitly. Remote Config cannot turn an already
+compiled public binary into an internal binary.
 
 ## Remote Config rollout
 
@@ -67,6 +77,8 @@ For an extreme rollout, publish these values together:
 - `subscription_pricing_tier`: `extreme`
 - `subscription_grace_period_days`: `7` or `14`
 - `subscription_extreme_activated_at_ms`: the rollout time in UTC epoch ms
+- `subscription_internal_trial_hours`: internal binary only; use `6` for the
+  current short end-to-end test cycle
 
 Setting an explicit activation timestamp gives every existing user the same
 deadline. If it is left at `0`, each device falls back to the first time it
@@ -88,13 +100,17 @@ is shipped in the app.
 
 3. Put one or more comma-separated hashes in the deployment secret
    `SUBSCRIPTION_REDEEM_CODE_HASHES`.
-4. Set `subscription_developer_redeem_enabled=true` in Remote Config.
+4. Build with `ONE_ONE_BUILD_AUDIENCE=internal` and set
+   `subscription_developer_redeem_enabled=true` in Remote Config.
 
 The authenticated endpoint grants the Firebase custom claim
 `oneOneDeveloper=true` and the app force-refreshes the ID token. Attempts are
 rate-limited and codes are compared with constant-time hashes. To revoke a
 developer, remove that claim in Firebase Admin/Auth; to stop new redemptions,
 disable the Remote Config flag and rotate/remove the backend hashes.
+
+Public binaries ignore both the developer claim and redeem flag even when an
+operator accidentally leaves the Remote Config value enabled.
 
 Do not use this flow as an alternative consumer payment method. It is for
 approved internal team accounts; App Store and Play Store sandbox/test users
@@ -106,10 +122,11 @@ remain the preferred purchase-testing path.
 - iOS sandbox build can query both packages and restore purchases.
 - Storefront `IN`/`IND` selects the India offering; other storefronts select
   international.
-- Normal tier does not block free users.
-- Extreme tier blocks only after the configured shared deadline.
-- Active `OneOne_Pro` entitlement and `oneOneDeveloper` claim each bypass the
-  blocker independently.
+- Public/store binaries block every unsubscribed user; normal versus extreme
+  selects pricing only. Internal binaries use the extreme-tier trial window.
+- Internal extreme tier blocks only after the configured shared deadline.
+- `OneOne_Pro` unlocks every distribution; `oneOneDeveloper` unlocks only an
+  internal binary.
 - Invalid codes return a generic error and rate-limit after five attempts.
 
 References: [RevenueCat Flutter installation](https://www.revenuecat.com/docs/getting-started/installation/flutter),

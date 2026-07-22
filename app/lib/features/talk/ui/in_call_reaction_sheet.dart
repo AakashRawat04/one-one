@@ -130,7 +130,10 @@ class _InCallReactionSheetState extends State<_InCallReactionSheet> {
                   decoration: InputDecoration(
                     hintText: 'or type a short line…',
                     hintStyle: TextStyle(color: Colors.white38, fontSize: 14.sp),
-                    counterText: '',
+                    counterStyle: TextStyle(
+                      color: Colors.white38,
+                      fontSize: 10.sp,
+                    ),
                     filled: true,
                     fillColor: const Color.fromRGBO(255, 255, 255, 0.08),
                     contentPadding: EdgeInsets.symmetric(

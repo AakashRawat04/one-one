@@ -57,18 +57,29 @@ class IdentityRepository {
       'Google authentication',
     );
     final now = _nowSeconds();
-    final localDevice = await _requiredStartupStep(
+
+    // None of these four reads depend on each other, so kick them all off
+    // together instead of awaiting one at a time — Dart futures start
+    // running the moment they're created, so assigning them to locals
+    // before awaiting runs them concurrently and can roughly halve (or
+    // better) the time this step takes on a typical connection.
+    final localDeviceFuture = _requiredStartupStep(
       _deviceIdentityStore.getOrCreate(),
       'local device identity setup',
     );
-    final appVersion = await _optionalStartupStep(
+    final appVersionFuture = _optionalStartupStep(
       _readAppVersion(),
       fallback: 'unknown',
     );
-    final permissions = await _readPermissionDiagnostics();
-    final fcmToken = Platform.isAndroid
-        ? await _optionalStartupValue(AndroidVoiceNudgeBridge().getFcmToken())
-        : null;
+    final permissionsFuture = _readPermissionDiagnostics();
+    final fcmTokenFuture = Platform.isAndroid
+        ? _optionalStartupValue(AndroidVoiceNudgeBridge().getFcmToken())
+        : Future<String?>.value(null);
+
+    final localDevice = await localDeviceFuture;
+    final appVersion = await appVersionFuture;
+    final permissions = await permissionsFuture;
+    final fcmToken = await fcmTokenFuture;
     debugPrint(
       '[OneOneFCM][DART-03] Identity startup registrationAvailable='
       '${fcmToken != null}',
@@ -479,9 +490,13 @@ class IdentityRepository {
     try {
       final firebaseUser = _auth.currentUser;
       if (firebaseUser == null || firebaseUser.uid != userId) return null;
-      final user = await _upsertUserProfile(firebaseUser, now);
-      final settings = await _ensureUserSettings(userId, now);
-      final device = await _upsertUserDevice(
+
+      // The profile, settings, and device records live at independent RTDB
+      // paths and don't read each other's results, so fetch/write them
+      // concurrently rather than as three sequential round trips.
+      final userFuture = _upsertUserProfile(firebaseUser, now);
+      final settingsFuture = _ensureUserSettings(userId, now);
+      final deviceFuture = _upsertUserDevice(
         userId: userId,
         localDevice: localDevice,
         appVersion: appVersion,
@@ -489,6 +504,10 @@ class IdentityRepository {
         fcmToken: fcmToken,
         now: now,
       );
+
+      final user = await userFuture;
+      final settings = await settingsFuture;
+      final device = await deviceFuture;
 
       final session = IdentitySession(
         user: user,
@@ -513,43 +532,30 @@ class IdentityRepository {
   }
 
   Future<_PermissionDiagnostics> _readPermissionDiagnostics() async {
-    bool batteryOptimizationIgnored = false;
-    bool notificationPermissionGranted = false;
+    // These are independent plugin channel calls — fire them together
+    // instead of one after another to avoid stacking up their latency.
+    final notificationPermissionFuture = _optionalStartupValue(
+      FlutterForegroundTask.checkNotificationPermission(),
+    );
+    final batteryOptimizationFuture = _optionalStartupValue(
+      FlutterForegroundTask.isIgnoringBatteryOptimizations,
+    );
+    final micStatusFuture = _optionalStartupValue(Permission.microphone.status);
+    // Device metadata is not stored in the Phase 3 ERD. This call is kept
+    // as a plugin smoke path for later diagnostics.
+    final androidInfoFuture = Platform.isAndroid
+        ? _optionalStartupValue(DeviceInfoPlugin().androidInfo)
+        : null;
 
-    try {
-      final notificationPermission = await _optionalStartupValue(
-        FlutterForegroundTask.checkNotificationPermission(),
-      );
-      notificationPermissionGranted =
-          notificationPermission == NotificationPermission.granted;
-    } catch (_) {
-      notificationPermissionGranted = false;
-    }
-
-    try {
-      batteryOptimizationIgnored = await FlutterForegroundTask
-          .isIgnoringBatteryOptimizations
-          .timeout(_optionalStartupTimeout);
-    } catch (_) {
-      batteryOptimizationIgnored = false;
-    }
-
-    final micStatus =
-        await _optionalStartupValue(Permission.microphone.status) ??
-        PermissionStatus.denied;
-
-    if (Platform.isAndroid) {
-      try {
-        await _optionalStartupValue(DeviceInfoPlugin().androidInfo);
-      } catch (_) {
-        // Device metadata is not stored in the Phase 3 ERD. This call is kept
-        // as a plugin smoke path for later diagnostics.
-      }
-    }
+    final notificationPermission = await notificationPermissionFuture;
+    final batteryOptimizationIgnored = await batteryOptimizationFuture ?? false;
+    final micStatus = await micStatusFuture ?? PermissionStatus.denied;
+    if (androidInfoFuture != null) await androidInfoFuture;
 
     return _PermissionDiagnostics(
       micPermissionGranted: micStatus.isGranted,
-      notificationPermissionGranted: notificationPermissionGranted,
+      notificationPermissionGranted:
+          notificationPermission == NotificationPermission.granted,
       batteryOptimizationIgnored: batteryOptimizationIgnored,
     );
   }

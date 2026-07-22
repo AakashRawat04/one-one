@@ -253,7 +253,7 @@ class _GroupHomeScreenState extends State<GroupHomeScreen> {
                 if (_latestInvite != null) ...[
                   const SizedBox(height: 12),
                   SelectableText(
-                    'Invite code: ${_latestInvite!.inviteCode}',
+                    'Invite link: ${_latestInvite!.inviteUrl}\nFallback PIN: ${_latestInvite!.inviteCode}',
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
                 ],

@@ -1,4 +1,5 @@
 import { randomBytes, createHash } from "node:crypto";
+import { config } from "../config.js";
 import { getRealtimeDatabase } from "../firebase/database.js";
 import { HttpError } from "../http/httpError.js";
 
@@ -105,6 +106,7 @@ export async function createInvite(input: CreateInviteInput) {
     inviteId,
     groupId: input.groupId,
     inviteCode,
+    inviteUrl: buildInviteUrl(inviteCode),
     expiresAt
   };
 }
@@ -312,6 +314,13 @@ function defaultAvailability(now: number) {
 
 function generateInviteCode() {
   return randomBytes(5).toString("base64url").toUpperCase();
+}
+
+function buildInviteUrl(inviteCode: string) {
+  const baseUrl = (
+    config.PUBLIC_INVITE_BASE_URL ?? `${config.PUBLIC_API_BASE_URL.replace(/\/$/, "")}/invite`
+  ).replace(/\/$/, "");
+  return `${baseUrl}/${encodeURIComponent(inviteCode)}`;
 }
 
 function hashInviteCode(inviteCode: string) {

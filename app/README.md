@@ -22,10 +22,10 @@ flutter pub get
 flutter run
 ```
 
-RevenueCat builds also require the public platform SDK key via
-`ONE_ONE_REVENUECAT_ANDROID_API_KEY` / `ONE_ONE_REVENUECAT_APPLE_API_KEY` dart
-defines. See `requirements/revenuecat-subscription-setup.md` for the product,
-offering, Remote Config, grace-period, and developer-code rollout checklist.
+This `restofthework-apartfrom-revenuecat` branch intentionally contains no
+RevenueCat client SDK or subscription startup gate. After Google authentication
+the app continues directly into its normal setup/home flow, so no RevenueCat
+API key or dashboard configuration is required while developing this branch.
 
 Phase 1 still contains a LiveKit background-audio spike under `lib/phase1_spike/`.
 
@@ -41,11 +41,18 @@ Runtime verification must be done manually on Android devices with a valid Fireb
 
 ## Android Nudges
 
-The home-screen notification button opens Push, Ring, and Voice nudge actions.
+The home-screen notification button opens an in-context bottom sheet for quick
+3/5/10-second Ring and Push nudges. Voice is recorded and sent from the same
+sheet by holding the mic for up to six seconds; there is no separate route.
 Voice recordings are AAC/M4A, mono, 64 kbps, and capped at six seconds. Incoming
 Ring and Voice nudges are handled by native Android services and can play while
 the screen is locked or the Flutter process is absent, provided the app has not
 been force-stopped and the device is online.
+Ring nudges use One One's two-chime sound rather than the device call ringtone;
+the generated audio buffer is exactly 3, 5, or 10 seconds long.
+Actionable notifications support Accept, Decline, and an inline Snooze choice
+for 5 or 15 minutes. Ring and Voice notifications remain in Notification
+Center after playback.
 
 Deploy the backend and Firebase rules described in
 `requirements/android-nudge-delivery.md` before device testing.
@@ -56,6 +63,15 @@ FCM registration uses the Firebase Installation ID flow in Firebase Messaging
 25+. In Firebase, enable the Cloud Messaging API and ensure the Android Firebase
 API key allows both the Firebase Installations API and FCM Registration API.
 Do not put a service-account key or legacy FCM server key in the app.
+
+## Android Invite Links
+
+Creating an invite now exposes a shareable HTTPS link through Android's system
+share sheet, with the PIN retained as fallback. Tapping the link persists it
+through sign-in/onboarding, joins through the existing authenticated endpoint,
+and opens Home with that group selected. Complete the signing-certificate and
+domain setup in `requirements/android-invite-links.md` before testing verified
+App Links.
 
 ## Run
 

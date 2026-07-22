@@ -162,7 +162,7 @@ Expected Android behavior by state:
 
 | Nudge | Foreground | Background | Removed from Recents / locked |
 | --- | --- | --- | --- |
-| Push | Native service displays `[FCM-08]` | Android displays notification payload | Android displays notification payload |
+| Push | Native service displays actionable `[FCM-08]` notification | High-priority data message builds actionable native notification | High-priority data message builds actionable native notification |
 | 3/5/10-second Ring | Native service rings | High-priority data message starts playback service | High-priority data message starts playback service |
 | Voice | Native service downloads and plays | High-priority data message starts playback service | High-priority data message starts playback service |
 
@@ -183,11 +183,20 @@ On the receiver, expect:
 ```
 
 - `[FCM-08]` confirms that a foreground Push/Friend Live notification was displayed.
+- `[FCM-08A]` reports notification permission and `walkie_alerts_v2` channel
+  importance before an actionable foreground Push is posted.
+- `[FCM-W8]` / `[FCM-W9]` now mean a legacy Push lacked action-routing fields;
+  Android still displays a non-actionable foreground fallback instead of
+  dropping it.
+- `[FCM-W1]` with “legacy notification” means an older notification payload
+  lacked `type`; it is also displayed through the foreground fallback.
 - `[FCM-W1..W5]` explains why a native nudge payload was rejected.
 - `[FCM-E3]` means Android refused to start the playback foreground service.
 - `[FCM-E8/E9]` means Android failed to acquire or release the bounded playback wake lock.
 - `[FCM-W6]` means the playback service received an invalid start request.
 - `[FCM-W7]` means FCM discarded queued messages before delivery.
+- `[FCM-W8..W10]` means an actionable nudge was missing its event/group routing data.
+- `[NUDGE-ACTION-01..03]` traces notification response upload, app action queuing, and sender response receipt.
 - Force-stopping the app prevents delivery until the user manually opens it.
 - A powered-off phone cannot receive or play a nudge; it can only receive after
   boot and reconnection if the message has not expired.

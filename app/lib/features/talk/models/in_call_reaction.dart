@@ -11,7 +11,7 @@ class InCallReaction {
   });
 
   static const topic = 'in_call_reaction';
-  static const maxTextLength = 48;
+  static const maxTextLength = 20;
 
   final String id;
   final String userId;

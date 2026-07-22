@@ -35,9 +35,16 @@ flutter run \
 Current state: Phase 1 audio spike, Phase 3 Firebase anonymous identity/device registration, Phase 4 groups/invites, Phase 5 online/away token/availability flow, Phase 7 push-to-talk, subscriptions, and Android nudge delivery.
 
 Android FCM registration is active. Push, 3/5/10-second ring, and six-second
-voice nudges are available from the home-screen nudge button. Ring and voice
-nudges use a native foreground playback service so Flutter does not need to be
-running. See `requirements/android-nudge-delivery.md` before deployment.
+voice nudges are available from the home-screen nudge button. Timed rings use
+One One's own two-chime sound and an exact-length PCM buffer instead of the
+phone ringtone. Ring and voice nudges use a native foreground playback service
+so Flutter does not need to be running. See
+`requirements/android-nudge-delivery.md` before deployment.
+
+Group invites now include a shareable HTTPS link. On Android, opening that link
+preserves the invite through authentication/onboarding, joins the group, and
+focuses it on Home. See `requirements/android-invite-links.md` for the one-time
+domain verification setup.
 
 ## Backend
 

@@ -12,7 +12,9 @@ import 'package:uuid/uuid.dart';
 
 import '../../../app/accent_theme.dart';
 import '../../../core/firebase/app_database.dart';
+import '../../../core/network/api_client.dart';
 import '../../groups/data/group_repository.dart';
+import '../../groups/data/invite_link_bridge.dart';
 import '../../groups/group_service_readiness.dart';
 import '../../groups/models/group_invite_result.dart';
 import '../../groups/models/group_member_summary.dart';
@@ -21,6 +23,9 @@ import '../../online/data/online_repository.dart';
 import '../../online/livekit_status.dart';
 import '../../online/models/member_availability.dart';
 import '../../online/models/online_session.dart';
+import '../../online/presence_config.dart';
+import '../../nudges/data/android_voice_nudge_bridge.dart';
+import '../../nudges/data/nudge_repository.dart';
 import '../../nudges/ui/nudge_screen.dart';
 import '../../talk/data/hand_raise_repository.dart';
 import '../../talk/data/talk_repository.dart';
@@ -41,10 +46,12 @@ class IdentityHomeScreen extends StatefulWidget {
     super.key,
     required this.initialSession,
     required this.identityRepository,
+    this.initialGroupId,
   });
 
   final IdentitySession initialSession;
   final IdentityRepository identityRepository;
+  final String? initialGroupId;
 
   @override
   State<IdentityHomeScreen> createState() => _IdentityHomeScreenState();
@@ -56,6 +63,9 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
   final OnlineRepository _onlineRepository = OnlineRepository();
   final TalkRepository _talkRepository = TalkRepository();
   final HandRaiseRepository _handRaiseRepository = HandRaiseRepository();
+  final AndroidVoiceNudgeBridge _nudgeActionBridge = AndroidVoiceNudgeBridge();
+  final NudgeRepository _nudgeRepository = NudgeRepository();
+  final InviteLinkBridge _inviteLinkBridge = InviteLinkBridge();
 
   late IdentitySession _session;
   List<GroupSummary> _groups = const [];
@@ -70,12 +80,20 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
   StreamSubscription<DatabaseEvent>? _membersSubscription;
   StreamSubscription<DatabaseEvent>? _handRaiseSubscription;
   StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
+  StreamSubscription<void>? _nudgeActionSubscription;
+  StreamSubscription<void>? _registrationRenewalSubscription;
+  StreamSubscription<void>? _inviteLinkSubscription;
 
   OnlineSession? _onlineSession;
   TalkSession? _talkSession;
   Room? _room;
   EventsListener<RoomEvent>? _roomListener;
   Timer? _heartbeatTimer;
+
+  // Automatic-offline-on-disconnect (with grace period) bookkeeping. See
+  // _evaluatePeerPresenceForAutoOffline for the state machine.
+  bool _peerWasLiveWithMe = false;
+  Timer? _peerDisconnectGraceTimer;
 
   int _carouselIndex = 0;
 
@@ -94,6 +112,10 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
   List<ConnectivityResult> _connectivity = const [];
   bool _registrationRefreshInFlight = false;
   DateTime? _lastRegistrationRefreshAt;
+  NudgeNotificationAction? _deferredNudgeAction;
+  bool _nudgeActionInFlight = false;
+  bool _inviteJoinInFlight = false;
+  String? _preferredGroupId;
 
   @override
   void initState() {
@@ -101,10 +123,24 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
     WidgetsBinding.instance.addObserver(this);
     _session =
         widget.identityRepository.currentSession ?? widget.initialSession;
+    _preferredGroupId = widget.initialGroupId;
     widget.identityRepository.sessionListenable.addListener(
       _onIdentitySessionChanged,
     );
     AccentThemeController.setAccentKey(_session.settings.accentColorKey);
+    _nudgeActionSubscription = AndroidVoiceNudgeBridge.actionSignals.listen((
+      _,
+    ) {
+      unawaited(_takePendingNudgeAction());
+    });
+    _registrationRenewalSubscription = AndroidVoiceNudgeBridge
+        .registrationSignals
+        .listen((_) {
+          unawaited(_refreshDeviceRegistration(force: true));
+        });
+    _inviteLinkSubscription = InviteLinkBridge.linkSignals.listen((_) {
+      unawaited(_takePendingInviteLink());
+    });
     unawaited(_startConnectivityMonitoring());
     unawaited(_loadGroups());
   }
@@ -120,7 +156,11 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
     _membersSubscription?.cancel();
     _handRaiseSubscription?.cancel();
     _connectivitySubscription?.cancel();
+    _nudgeActionSubscription?.cancel();
+    _registrationRenewalSubscription?.cancel();
+    _inviteLinkSubscription?.cancel();
     _heartbeatTimer?.cancel();
+    _peerDisconnectGraceTimer?.cancel();
     _clearFloatingReactions();
     final activeTalk = _talkSession;
     if (activeTalk != null) {
@@ -135,13 +175,16 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       unawaited(_refreshDeviceRegistration());
+      unawaited(_takePendingNudgeAction());
+      unawaited(_takePendingInviteLink());
     }
   }
 
-  Future<void> _refreshDeviceRegistration() async {
+  Future<void> _refreshDeviceRegistration({bool force = false}) async {
     final lastRefresh = _lastRegistrationRefreshAt;
     if (_registrationRefreshInFlight ||
-        (lastRefresh != null &&
+        (!force &&
+            lastRefresh != null &&
             DateTime.now().difference(lastRefresh) <
                 const Duration(seconds: 30))) {
       return;
@@ -244,8 +287,108 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
     } finally {
       if (mounted && _loadingGroups) {
         setState(() => _loadingGroups = false);
+        unawaited(_takePendingNudgeAction());
+        unawaited(_takePendingInviteLink());
       }
     }
+  }
+
+  Future<void> _takePendingInviteLink() async {
+    if (_inviteJoinInFlight || _loadingGroups) return;
+    final inviteCode = await _inviteLinkBridge.peekPendingInviteCode();
+    if (inviteCode == null || !mounted) return;
+    _inviteJoinInFlight = true;
+    try {
+      final groupId = await _groupRepository.joinInvite(inviteCode);
+      await _inviteLinkBridge.clearPendingInviteCode(inviteCode);
+      if (!mounted) return;
+      Navigator.of(context).popUntil((route) => route.isFirst);
+      if (!mounted) return;
+      _preferredGroupId = groupId;
+      debugPrint(
+        '[OneOneInvite] Joined link while Home was active groupSuffix='
+        '${groupId.length <= 6 ? groupId : groupId.substring(groupId.length - 6)}',
+      );
+      await _loadGroups();
+      if (mounted) {
+        setState(() => _message = 'Group joined from invite link.');
+      }
+    } catch (error) {
+      debugPrint(
+        '[OneOneInvite] Active invite failed ${error.runtimeType}: $error',
+      );
+      if (error is ApiException &&
+          const {
+            'invite_not_found',
+            'invite_unavailable',
+            'group_full',
+            'group_not_active',
+          }.contains(error.code)) {
+        await _inviteLinkBridge.clearPendingInviteCode(inviteCode);
+      }
+      if (mounted) {
+        setState(() {
+          _message = error is ApiException
+              ? error.message
+              : 'Couldn’t open this invite. Check your connection.';
+        });
+      }
+    } finally {
+      _inviteJoinInFlight = false;
+    }
+  }
+
+  Future<void> _takePendingNudgeAction() async {
+    if (_nudgeActionInFlight) return;
+    NudgeNotificationAction? action;
+    try {
+      action =
+          _deferredNudgeAction ??
+          await _nudgeActionBridge.takePendingNudgeAction();
+      if (action == null || !mounted) return;
+      if (_loadingGroups) {
+        _deferredNudgeAction = action;
+        return;
+      }
+      _deferredNudgeAction = null;
+      _nudgeActionInFlight = true;
+      await _processNudgeAction(action);
+    } catch (error) {
+      if (action != null) _deferredNudgeAction = action;
+      if (mounted) {
+        setState(() => _message = 'Couldn’t process the nudge action.');
+      }
+    } finally {
+      _nudgeActionInFlight = false;
+    }
+  }
+
+  Future<void> _processNudgeAction(NudgeNotificationAction action) async {
+    final index = _groups.indexWhere(
+      (group) => group.groupId == action.groupId,
+    );
+    if (index < 0) {
+      setState(() => _message = 'That nudge group is no longer available.');
+      return;
+    }
+
+    await _onGroupCarouselChanged(index);
+    if (!mounted) return;
+    if (!_isOnline) await _goOnline();
+    if (!mounted) return;
+    if (!_isOnline) {
+      throw StateError('Could not enter the nudge group.');
+    }
+    if (action.action != 'accept') return;
+    await _nudgeRepository.respond(
+      groupId: action.groupId,
+      eventId: action.eventId,
+      action: 'accept',
+    );
+    debugPrint(
+      '[OneOneFCM][DART-07] Accepted nudge and entered group '
+      'eventSuffix=${action.eventId.length <= 6 ? action.eventId : action.eventId.substring(action.eventId.length - 6)}',
+    );
   }
 
   Future<void> _replaceWithGroupEntry(GroupEntryResolution resolution) async {
@@ -340,7 +483,92 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
           if (!mounted || _selectedGroup?.groupId != groupId) return;
           setState(() => _availability = next);
           _scheduleAvailabilityExpiryRefresh();
+          _evaluatePeerPresenceForAutoOffline(next);
         });
+  }
+
+  /// Implements "automatic offline handling with a grace period": while
+  /// this device is online, watch for every other member dropping off
+  /// availability (a real disconnect, or Firebase's onDisconnect hook
+  /// firing). If nobody else is live for [PresenceConfig.disconnectGracePeriod],
+  /// this device is taken offline automatically and the user is told why.
+  /// A peer reconnecting before the timer fires cancels it — the session is
+  /// restored with no other action needed.
+  void _evaluatePeerPresenceForAutoOffline(
+    Map<String, MemberAvailability> availability,
+  ) {
+    if (!_isOnline) {
+      _peerWasLiveWithMe = false;
+      _peerDisconnectGraceTimer?.cancel();
+      _peerDisconnectGraceTimer = null;
+      return;
+    }
+
+    final anyPeerLive = availability.entries.any(
+      (entry) => entry.key != _session.userId && entry.value.isLive,
+    );
+
+    if (anyPeerLive) {
+      _peerWasLiveWithMe = true;
+      if (_peerDisconnectGraceTimer != null) {
+        _peerDisconnectGraceTimer?.cancel();
+        _peerDisconnectGraceTimer = null;
+        if (mounted) setState(() => _message = 'Your friend reconnected.');
+      }
+      return;
+    }
+
+    // Never had a peer live with us yet (e.g. we just connected and theirs
+    // hasn't propagated) — nothing to react to.
+    if (!_peerWasLiveWithMe) return;
+    if (_peerDisconnectGraceTimer != null) return;
+
+    _peerDisconnectGraceTimer = Timer(PresenceConfig.disconnectGracePeriod, () {
+      _peerDisconnectGraceTimer = null;
+      if (!mounted || !_isOnline) return;
+      unawaited(_goAway());
+      _showPresenceSnackbar(
+        'The other participant has gone offline. You are now offline.',
+      );
+    });
+  }
+
+  /// Themed Snackbar for presence transitions the user didn't directly
+  /// trigger (auto-offline, blocked "go online alone" attempts) — kept
+  /// visually consistent with the app's dark glass surfaces rather than
+  /// the default Material Snackbar look.
+  void _showPresenceSnackbar(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: const Color(0xff1e1e1e),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14.r),
+            side: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+          ),
+          margin: EdgeInsets.fromLTRB(16.w, 0, 16.w, 16.h),
+          duration: const Duration(seconds: 4),
+          content: Row(
+            children: [
+              Icon(
+                Icons.info_outline_rounded,
+                color: Colors.white70,
+                size: 18.sp,
+              ),
+              SizedBox(width: 10.w),
+              Expanded(
+                child: Text(
+                  message,
+                  style: TextStyle(color: Colors.white, fontSize: 13.sp),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
   }
 
   void _listenToHandRaises(String groupId) {
@@ -536,60 +764,93 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
                 ),
                 SizedBox(height: 8.h),
                 Text(
-                  'Share this group PIN so they can join',
+                  'Share this link. Your friend will open One One and join this group automatically.',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: Colors.white70, fontSize: 14.sp),
                 ),
                 SizedBox(height: 20.h),
-                GestureDetector(
-                  onTap: () async {
+                Material(
+                  color: const Color(0xff1f1f1f),
+                  borderRadius: BorderRadius.circular(18.r),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(18.r),
+                    onTap: () async {
+                      try {
+                        await InviteLinkBridge().shareInviteLink(
+                          invite.inviteUrl,
+                        );
+                      } catch (_) {
+                        await Clipboard.setData(
+                          ClipboardData(text: invite.inviteUrl),
+                        );
+                        if (!context.mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Invite link copied')),
+                        );
+                      }
+                    },
+                    child: Container(
+                      width: double.infinity,
+                      padding: EdgeInsets.symmetric(
+                        horizontal: 20.w,
+                        vertical: 18.h,
+                      ),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(18.r),
+                        border: Border.all(
+                          color: const Color.fromRGBO(255, 255, 255, 0.12),
+                        ),
+                      ),
+                      child: Column(
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                Icons.ios_share_rounded,
+                                color: Colors.white,
+                                size: 22.sp,
+                              ),
+                              SizedBox(width: 10.w),
+                              Text(
+                                'Share invite link',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 16.sp,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ],
+                          ),
+                          SizedBox(height: 8.h),
+                          Text(
+                            invite.inviteUrl,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: Colors.white54,
+                              fontSize: 11.sp,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                SizedBox(height: 14.h),
+                TextButton.icon(
+                  onPressed: () async {
                     await Clipboard.setData(
                       ClipboardData(text: invite.inviteCode),
                     );
                     if (!context.mounted) return;
-                    Navigator.of(context).pop();
-                    if (!mounted) return;
-                    ScaffoldMessenger.of(
-                      this.context,
-                    ).showSnackBar(const SnackBar(content: Text('PIN copied')));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Fallback PIN copied')),
+                    );
                   },
-                  child: Container(
-                    width: double.infinity,
-                    padding: EdgeInsets.symmetric(
-                      horizontal: 20.w,
-                      vertical: 18.h,
-                    ),
-                    decoration: BoxDecoration(
-                      color: const Color(0xff1f1f1f),
-                      borderRadius: BorderRadius.circular(18.r),
-                      border: Border.all(
-                        color: const Color.fromRGBO(255, 255, 255, 0.12),
-                      ),
-                    ),
-                    child: Column(
-                      children: [
-                        Text(
-                          invite.inviteCode,
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 32.sp,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: 6,
-                          ),
-                        ),
-                        SizedBox(height: 8.h),
-                        Text(
-                          'tap to copy',
-                          style: TextStyle(
-                            color: Colors.white54,
-                            fontSize: 12.sp,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
+                  icon: Icon(Icons.copy_rounded, size: 17.sp),
+                  label: Text('Copy PIN ${invite.inviteCode}'),
                 ),
               ],
             ),
@@ -662,9 +923,15 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
     }
     if (_isOnline) {
       unawaited(_goAway());
-    } else {
-      unawaited(_goOnline());
+      return;
     }
+    // Going online is no longer a solo action: it only happens once a sent
+    // nudge is accepted (see _processNudgeAction, which drives both the
+    // accepting recipient and the original sender into the room together).
+    // A bare manual tap with no accepted nudge in flight is rejected here.
+    _showPresenceSnackbar(
+      'You can only go online after another user accepts your Nudge.',
+    );
   }
 
   Future<void> _goOnline() async {
@@ -746,6 +1013,9 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
       }
       _heartbeatTimer?.cancel();
       _heartbeatTimer = null;
+      _peerDisconnectGraceTimer?.cancel();
+      _peerDisconnectGraceTimer = null;
+      _peerWasLiveWithMe = false;
       await _disconnectLiveKit();
       await _onlineRepository.goAway(session);
       await _clearOwnHandRaise(groupId: session.groupId);
@@ -1304,6 +1574,13 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
   GroupSummary? _resolveSelectedGroup(List<GroupSummary> groups) {
     if (groups.isEmpty) return null;
 
+    final preferredGroupId = _preferredGroupId;
+    if (preferredGroupId != null) {
+      for (final group in groups) {
+        if (group.groupId == preferredGroupId) return group;
+      }
+    }
+
     final currentGroup = _selectedGroup;
     if (currentGroup == null) return groups.first;
 
@@ -1327,14 +1604,17 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
   void _openNudges() {
     final group = _selectedGroup;
     if (group == null) return;
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => NudgeScreen(
-          group: group,
-          currentUserId: _session.userId,
-          members: _displayMembers,
-          accent: accentColorForKey(_session.settings.accentColorKey),
-        ),
+    if (_session.settings.hapticsEnabled) {
+      unawaited(HapticFeedback.selectionClick());
+    }
+    unawaited(
+      showNudgeBottomSheet(
+        context,
+        group: group,
+        currentUserId: _session.userId,
+        members: _displayMembers,
+        accent: accentColorForKey(_session.settings.accentColorKey),
+        hapticsEnabled: _session.settings.hapticsEnabled,
       ),
     );
   }
@@ -1376,10 +1656,14 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
       warnings.add('Microphone permission has not been confirmed.');
     }
     if (!_session.device.notificationPermissionGranted) {
-      warnings.add('Notification permission is required for closed-app nudges.');
+      warnings.add(
+        'Notification permission is required for closed-app nudges.',
+      );
     }
     if (_session.device.fcmToken == null) {
-      warnings.add('Push registration is not ready. Reopen the app while online.');
+      warnings.add(
+        'Push registration is not ready. Reopen the app while online.',
+      );
     }
     if (!_session.device.batteryOptimizationIgnored) {
       warnings.add('Battery optimization may interrupt background mode.');
@@ -1506,8 +1790,6 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
               children: [
                 _TopChrome(
                   onSettings: _openSettings,
-                  onNudge: _openNudges,
-                  nudgeEnabled: focusedGroup != null && _friends.isNotEmpty,
                   onSetup: _openSetupWarnings,
                   hasSetupWarnings: warnings.isNotEmpty,
                   busy: _busy,
@@ -1586,7 +1868,7 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
                       ? 'Tap to Talk'
                       : !_serviceReady
                       ? 'invite a friend to enable voice service'
-                      : 'go online to start talking',
+                      : 'send a nudge to go online together',
                   style: TextStyle(
                     color: const Color.fromRGBO(255, 255, 255, 0.55),
                     fontSize: 13.sp,
@@ -1597,17 +1879,142 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
               ],
             ),
           ),
-          if (_floatingReactions.isNotEmpty)
-            InCallReactionOverlay(reactions: _floatingReactions),
-          if (_loadingGroups)
-            const ColoredBox(
-              color: Color(0x88000000),
-              child: Center(
-                child: CircularProgressIndicator(color: Colors.white),
+          // Edge-anchored floating action rather than a top-bar icon: a
+          // nudge is an occasional, deliberate "reach out" action, so it
+          // gets a thumb-reachable spot near the screen's rim instead of
+          // competing for space among the settings/status icons up top.
+          // Sit above the carousel's "+ create new group" dashed circle
+          // (200.h row, 72.w tile) plus the hint/copy block beneath it.
+          Positioned(
+            right: 0,
+            bottom: 230.h,
+            child: SafeArea(
+              child: Padding(
+                padding: EdgeInsets.only(right: 12.w),
+                child: _NudgeFloatingButton(
+                  enabled: focusedGroup != null && _friends.isNotEmpty,
+                  attentionPulse:
+                      focusedGroup != null && _friends.isNotEmpty && !_isOnline,
+                  accent: accent,
+                  onTap: _openNudges,
+                ),
               ),
             ),
+          ),
+          if (_floatingReactions.isNotEmpty)
+            InCallReactionOverlay(reactions: _floatingReactions),
+          // A shimmering silhouette of this exact layout reads as "already
+          // loading the real screen" rather than a generic wait — replaces
+          // the previous full-screen spinner overlay.
+          if (_loadingGroups) const _HomeLoadingSkeleton(),
         ],
       ),
+    );
+  }
+}
+
+/// Skeleton placeholder shown for the brief window while groups/members
+/// load, shaped like the real home screen (top bar, friends strip, big
+/// carousel circle, hint text) so the layout never visibly "pops in".
+class _HomeLoadingSkeleton extends StatefulWidget {
+  const _HomeLoadingSkeleton();
+
+  @override
+  State<_HomeLoadingSkeleton> createState() => _HomeLoadingSkeletonState();
+}
+
+class _HomeLoadingSkeletonState extends State<_HomeLoadingSkeleton>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1300),
+  )..repeat();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ColoredBox(
+      color: const Color(0xff101010),
+      child: SafeArea(
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(16.w, 8.h, 16.w, 24.h),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  _shimmer(width: 44.w, height: 44.w, radius: 22.r),
+                  const Spacer(),
+                  _shimmer(width: 72.w, height: 30.h, radius: 18.r),
+                ],
+              ),
+              SizedBox(height: 30.h),
+              _shimmer(width: 84.w, height: 12.h, radius: 6.r),
+              SizedBox(height: 12.h),
+              SizedBox(
+                height: 64.h,
+                child: Row(
+                  children: [
+                    for (var i = 0; i < 4; i++) ...[
+                      _shimmer(width: 52.w, height: 52.w, radius: 26.r),
+                      SizedBox(width: 12.w),
+                    ],
+                  ],
+                ),
+              ),
+              const Spacer(),
+              Center(
+                child: _shimmer(width: 190.w, height: 190.w, radius: 95.r),
+              ),
+              const Spacer(),
+              Center(
+                child: _shimmer(width: 150.w, height: 12.h, radius: 6.r),
+              ),
+              SizedBox(height: 12.h),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _shimmer({
+    required double width,
+    required double height,
+    required double radius,
+  }) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, _) {
+        final sweep = _controller.value;
+        return ShaderMask(
+          blendMode: BlendMode.srcATop,
+          shaderCallback: (bounds) {
+            return LinearGradient(
+              begin: Alignment(-1 + sweep * 3, 0),
+              end: Alignment(sweep * 3, 0),
+              colors: [
+                Colors.white.withValues(alpha: 0.05),
+                Colors.white.withValues(alpha: 0.18),
+                Colors.white.withValues(alpha: 0.05),
+              ],
+            ).createShader(bounds);
+          },
+          child: Container(
+            width: width,
+            height: height,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(radius),
+            ),
+          ),
+        );
+      },
     );
   }
 }
@@ -1762,8 +2169,6 @@ class _BackdropMemberCollage extends StatelessWidget {
 class _TopChrome extends StatelessWidget {
   const _TopChrome({
     required this.onSettings,
-    required this.onNudge,
-    required this.nudgeEnabled,
     required this.onSetup,
     required this.hasSetupWarnings,
     required this.busy,
@@ -1776,8 +2181,6 @@ class _TopChrome extends StatelessWidget {
   });
 
   final VoidCallback onSettings;
-  final VoidCallback onNudge;
-  final bool nudgeEnabled;
   final VoidCallback onSetup;
   final bool hasSetupWarnings;
   final bool busy;
@@ -1837,12 +2240,6 @@ class _TopChrome extends StatelessWidget {
                           ),
                         ),
                     ],
-                  ),
-                  SizedBox(width: 6.w),
-                  _GlassIconButton(
-                    tooltip: 'Nudge friends',
-                    icon: Icons.notifications_active_outlined,
-                    onPressed: nudgeEnabled ? onNudge : null,
                   ),
                   if (showNetworkStrength) ...[
                     SizedBox(width: 6.w),
@@ -1908,7 +2305,7 @@ class _StatusToggle extends StatelessWidget {
             ? 'Available after another member joins'
             : online
             ? 'Tap to go away'
-            : 'Tap to go online',
+            : 'Send a nudge — going online together needs an accepted nudge',
         child: Material(
           color: const Color.fromRGBO(255, 255, 255, 0.12),
           borderRadius: BorderRadius.circular(18.r),
@@ -2009,6 +2406,122 @@ class _GlassIconButton extends StatelessWidget {
             color: onPressed == null ? Colors.white38 : Colors.white,
             size: 20.sp,
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Edge-anchored floating "nudge" action. Replaces the old top-bar bell
+/// icon (which read as a generic notification/alarm glyph) with a warm,
+/// human "wave hello" metaphor that fits an intimate one-to-one app better.
+/// When nobody is online yet, a slow breathing glow hints that this is the
+/// way to reach out — a gentle affordance, not an alarm-style flash.
+class _NudgeFloatingButton extends StatefulWidget {
+  const _NudgeFloatingButton({
+    required this.enabled,
+    required this.attentionPulse,
+    required this.accent,
+    required this.onTap,
+  });
+
+  final bool enabled;
+  final bool attentionPulse;
+  final Color accent;
+  final VoidCallback onTap;
+
+  @override
+  State<_NudgeFloatingButton> createState() => _NudgeFloatingButtonState();
+}
+
+class _NudgeFloatingButtonState extends State<_NudgeFloatingButton>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _breatheController = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1900),
+  );
+  double _pressScale = 1;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.attentionPulse) _breatheController.repeat(reverse: true);
+  }
+
+  @override
+  void didUpdateWidget(covariant _NudgeFloatingButton oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.attentionPulse == oldWidget.attentionPulse) return;
+    if (widget.attentionPulse) {
+      _breatheController.repeat(reverse: true);
+    } else {
+      _breatheController.stop();
+      _breatheController.value = 0;
+    }
+  }
+
+  @override
+  void dispose() {
+    _breatheController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: widget.enabled
+          ? 'Nudge friends'
+          : 'Invite a friend to send a nudge',
+      child: GestureDetector(
+        onTapDown: widget.enabled
+            ? (_) => setState(() => _pressScale = 0.9)
+            : null,
+        onTapCancel: () => setState(() => _pressScale = 1),
+        onTapUp: (_) => setState(() => _pressScale = 1),
+        onTap: widget.enabled ? widget.onTap : null,
+        child: AnimatedBuilder(
+          animation: _breatheController,
+          builder: (context, _) {
+            final glow = widget.attentionPulse ? _breatheController.value : 0.0;
+            return AnimatedScale(
+              scale: _pressScale,
+              duration: const Duration(milliseconds: 120),
+              curve: Curves.easeOut,
+              child: Container(
+                width: 56.w,
+                height: 56.w,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: widget.enabled
+                      ? const Color.fromRGBO(0, 0, 0, 0.4)
+                      : const Color.fromRGBO(255, 255, 255, 0.06),
+                  border: Border.all(
+                    color: widget.enabled
+                        ? widget.accent.withValues(alpha: 0.55 + glow * 0.35)
+                        : Colors.white.withValues(alpha: 0.14),
+                    width: 1.4,
+                  ),
+                  boxShadow: widget.enabled
+                      ? [
+                          BoxShadow(
+                            color: widget.accent.withValues(
+                              alpha: 0.18 + glow * 0.22,
+                            ),
+                            blurRadius: 16.r + glow * 10.r,
+                            spreadRadius: glow * 2.r,
+                          ),
+                        ]
+                      : null,
+                ),
+                child: Icon(
+                  Icons.waving_hand_rounded,
+                  color: widget.enabled ? Colors.white : Colors.white38,
+                  size: 24.sp,
+                ),
+              ),
+            );
+          },
         ),
       ),
     );

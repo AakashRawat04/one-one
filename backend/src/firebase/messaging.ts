@@ -30,7 +30,7 @@ export async function sendPushToTokens(payload: PushPayload) {
     android: {
       priority: "high",
       notification: {
-        channelId: "walkie_alerts"
+        channelId: "walkie_alerts_v2"
       }
     }
   }));
@@ -69,6 +69,7 @@ function logEmptyBatch(operation: string) {
   logger.warn(
     {
       checkpoint: "FCM-BE-W0",
+      category: "expected",
       operation,
       targetCount: 0
     },
@@ -87,7 +88,10 @@ export function isPermanentMessagingTargetError(error: unknown) {
   const code = String(error.code);
   return (
     code === "messaging/registration-token-not-registered" ||
-    code === "messaging/invalid-registration-token"
+    code === "messaging/invalid-registration-token" ||
+    // FID-based sends (current Android installs) use this code when the
+    // Installation ID is gone or revoked — clear it so we stop retrying.
+    code === "messaging/installation-id-not-registered"
   );
 }
 
@@ -97,6 +101,7 @@ async function sendMessagesWithDiagnostics(messages: Message[], operation: strin
   logger.info(
     {
       checkpoint: "FCM-BE-01",
+      category: "expected",
       operation,
       targetCount: messages.length,
       fidCount,
@@ -114,6 +119,7 @@ async function sendMessagesWithDiagnostics(messages: Message[], operation: strin
     log(
       {
         checkpoint: result.failureCount > 0 ? "FCM-BE-W1" : "FCM-BE-02",
+        category: result.failureCount > 0 ? "unexpected" : "expected",
         operation,
         successCount: result.successCount,
         failureCount: result.failureCount,
@@ -134,6 +140,7 @@ async function sendMessagesWithDiagnostics(messages: Message[], operation: strin
     logger.error(
       {
         checkpoint: "FCM-BE-E1",
+        category: "unexpected",
         operation,
         error: diagnostic
       },

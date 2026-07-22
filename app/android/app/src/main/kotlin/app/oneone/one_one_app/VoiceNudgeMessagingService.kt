@@ -14,6 +14,7 @@ class VoiceNudgeMessagingService : FirebaseMessagingService() {
                 VoiceNudgeDiagnostics.describeIdentifier(installationId),
         )
         VoiceNudgeTokenStore.save(this, installationId)
+        NudgeActionDispatcher.signalRegistrationRenewed()
     }
 
     override fun onMessageReceived(message: RemoteMessage) {
@@ -25,24 +26,46 @@ class VoiceNudgeMessagingService : FirebaseMessagingService() {
         )
         val kind = data["type"]
         if (kind == null) {
-            Log.w(VoiceNudgeDiagnostics.tag, "[FCM-W1] Ignored message without type")
+            if (message.notification != null) {
+                Log.w(
+                    VoiceNudgeDiagnostics.tag,
+                    "[FCM-W1] Legacy notification has no type; displaying foreground fallback",
+                )
+                showForegroundNotification(message, "legacy_notification")
+                return
+            }
+            Log.w(VoiceNudgeDiagnostics.tag, "[FCM-W1] Ignored data message without type")
             return
         }
-        if (kind != VoiceNudgeContract.kindVoice && kind != VoiceNudgeContract.kindRing) {
-            if (
-                kind == VoiceNudgeContract.kindPush ||
-                kind == VoiceNudgeContract.kindFriendLive
-            ) {
-                showForegroundNotification(message, kind)
-            } else {
-                Log.w(VoiceNudgeDiagnostics.tag, "[FCM-W2] Ignored unknown message type=$kind")
+        when (kind) {
+            VoiceNudgeContract.kindPush -> {
+                showActionableNotification(message)
+                return
             }
-            return
+            VoiceNudgeContract.kindFriendLive -> {
+                showForegroundNotification(message, kind)
+                return
+            }
+            VoiceNudgeContract.kindResponse -> {
+                showNudgeResponse(message)
+                return
+            }
+            VoiceNudgeContract.kindVoice,
+            VoiceNudgeContract.kindRing -> Unit
+            else -> {
+                Log.w(VoiceNudgeDiagnostics.tag, "[FCM-W2] Ignored unknown message type=$kind")
+                return
+            }
         }
 
         val eventId = data["eventId"]
         if (eventId == null) {
             Log.w(VoiceNudgeDiagnostics.tag, "[FCM-W3] Ignored $kind without eventId")
+            return
+        }
+        val groupId = data["groupId"]?.takeIf { it.isNotBlank() }
+        if (groupId == null) {
+            Log.w(VoiceNudgeDiagnostics.tag, "[FCM-W10] Ignored $kind without groupId")
             return
         }
         val senderName = data["senderName"]?.take(80).orEmpty().ifBlank { "Someone" }
@@ -64,6 +87,8 @@ class VoiceNudgeMessagingService : FirebaseMessagingService() {
             putExtra(VoiceNudgeContract.extraAudioUrl, data["audioUrl"])
             putExtra(VoiceNudgeContract.extraAckUrl, data["ackUrl"])
             putExtra(VoiceNudgeContract.extraDeliveryToken, data["deliveryToken"])
+            putExtra(VoiceNudgeContract.extraGroupId, groupId)
+            putExtra(VoiceNudgeContract.extraResponseUrl, data["responseUrl"])
         }
 
         try {
@@ -83,6 +108,9 @@ class VoiceNudgeMessagingService : FirebaseMessagingService() {
                 VoiceNudgeNotifications.idFor(eventId),
                 VoiceNudgeNotifications.build(
                     this,
+                    eventId,
+                    groupId,
+                    data["responseUrl"],
                     senderName,
                     "Tap to open this nudge",
                     ongoing = false,
@@ -112,17 +140,115 @@ class VoiceNudgeMessagingService : FirebaseMessagingService() {
         }
         val manager = getSystemService(NOTIFICATION_SERVICE) as android.app.NotificationManager
         val notificationKey = message.messageId ?: "${kind}_${message.sentTime}"
-        manager.notify(
-            VoiceNudgeNotifications.idFor(notificationKey),
-            VoiceNudgeNotifications.buildGeneral(
+        try {
+            manager.notify(
+                VoiceNudgeNotifications.idFor(notificationKey),
+                VoiceNudgeNotifications.buildGeneral(
+                    this,
+                    message.notification?.title ?: fallbackTitle,
+                    message.notification?.body ?: fallbackBody,
+                ),
+            )
+            Log.i(
+                VoiceNudgeDiagnostics.tag,
+                "[FCM-08] Foreground notification displayed type=$kind",
+            )
+        } catch (error: SecurityException) {
+            VoiceNudgeDiagnostics.logFailure("[FCM-E10] Notification permission", error)
+        }
+    }
+
+    private fun showActionableNotification(message: RemoteMessage) {
+        val data = message.data
+        val eventId = data["eventId"] ?: run {
+            Log.w(
+                VoiceNudgeDiagnostics.tag,
+                "[FCM-W8] Legacy Push has no eventId; displaying non-actionable fallback",
+            )
+            showForegroundNotification(message, VoiceNudgeContract.kindPush)
+            return
+        }
+        val groupId = data["groupId"] ?: run {
+            Log.w(
+                VoiceNudgeDiagnostics.tag,
+                "[FCM-W9] Legacy Push has no groupId; displaying non-actionable fallback",
+            )
+            showForegroundNotification(message, VoiceNudgeContract.kindPush)
+            return
+        }
+        val senderName = data["senderName"]?.take(80).orEmpty().ifBlank { "Someone" }
+        val manager = getSystemService(NOTIFICATION_SERVICE) as android.app.NotificationManager
+        val notificationsEnabled = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            manager.areNotificationsEnabled()
+        } else {
+            true
+        }
+        val channelImportance = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            manager.getNotificationChannel(
+                VoiceNudgeContract.generalNotificationChannelId,
+            )?.importance
+        } else {
+            null
+        }
+        Log.i(
+            VoiceNudgeDiagnostics.tag,
+            "[FCM-08A] Foreground display readiness " +
+                "notificationsEnabled=$notificationsEnabled " +
+                "channel=${VoiceNudgeContract.generalNotificationChannelId} " +
+                "importance=${channelImportance ?: "legacy"}",
+        )
+        try {
+            manager.notify(
+                VoiceNudgeNotifications.idFor(eventId),
+                VoiceNudgeNotifications.buildActionable(
+                    this,
+                    eventId,
+                    groupId,
+                    data["responseUrl"],
+                    senderName,
+                    "$senderName nudged you",
+                    "Accept, snooze, or decline",
+                ),
+            )
+            Log.i(
+                VoiceNudgeDiagnostics.tag,
+                "[FCM-08] Actionable push notification displayed",
+            )
+        } catch (error: SecurityException) {
+            VoiceNudgeDiagnostics.logFailure("[FCM-E10] Notification permission", error)
+        }
+    }
+
+    private fun showNudgeResponse(message: RemoteMessage) {
+        val data = message.data
+        val eventId = data["eventId"] ?: return
+        val groupId = data["groupId"] ?: return
+        val responseAction = data["responseAction"] ?: return
+        val snoozeMinutes = data["snoozeMinutes"]?.toIntOrNull()
+        val responderName = data["responderName"]?.take(80).orEmpty().ifBlank { "Your friend" }
+        if (responseAction == "accept") {
+            NudgeActionStore.save(
                 this,
-                message.notification?.title ?: fallbackTitle,
-                message.notification?.body ?: fallbackBody,
+                PendingNudgeAction("connect", eventId, groupId),
+            )
+            NudgeActionDispatcher.signal()
+        }
+        val manager = getSystemService(NOTIFICATION_SERVICE) as android.app.NotificationManager
+        manager.notify(
+            VoiceNudgeNotifications.idFor(eventId),
+            VoiceNudgeNotifications.buildResponse(
+                this,
+                eventId,
+                groupId,
+                responderName,
+                responseAction,
+                snoozeMinutes,
             ),
         )
         Log.i(
             VoiceNudgeDiagnostics.tag,
-            "[FCM-08] Foreground notification displayed type=$kind",
+            "[NUDGE-ACTION-03] sender received response=$responseAction " +
+                "snoozeMinutes=${snoozeMinutes ?: "none"}",
         )
     }
 
