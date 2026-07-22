@@ -160,36 +160,63 @@ export async function initiateVoiceNudgeUpload(input: InitiateVoiceNudgeUploadIn
 export async function completeVoiceNudgeUpload(input: CompleteVoiceNudgeUploadInput) {
   const ticket = verifyUploadTicket(input.uploadTicket);
   const now = nowSeconds();
-
   if (ticket.uploadExpiresAt < now) {
     throw new HttpError(410, "voice_nudge_upload_expired", "Voice nudge upload has expired.");
   }
+  return dispatchVoiceNudgeFromContext(ticket);
+}
 
-  const audioBytes = await verifyClientUploadedVoiceObject(ticket.eventId, ticket.storagePath);
+/** Raw-context dispatch — used by the legacy RTDB fallback path in routes. */
+export async function completeVoiceNudgeUploadWithContext(ctx: {
+  eventId: string;
+  groupId: string;
+  senderUserId: string;
+  senderName: string;
+  durationMs: number;
+  expiresAt: number;
+  storagePath: string;
+  recipientUserIds: string[];
+  recipientDevices: RecipientDevice[];
+}) {
+  return dispatchVoiceNudgeFromContext(ctx);
+}
+
+async function dispatchVoiceNudgeFromContext(ctx: {
+  eventId: string;
+  groupId: string;
+  senderUserId: string;
+  senderName: string;
+  durationMs: number;
+  expiresAt: number;
+  storagePath: string;
+  recipientUserIds: string[];
+  recipientDevices: RecipientDevice[];
+}) {
+  const audioBytes = await verifyClientUploadedVoiceObject(ctx.eventId, ctx.storagePath);
 
   logger.info(
     {
       checkpoint: "VOICE-NUDGE-BE-02",
       category: "expected",
-      eventId: ticket.eventId,
-      storagePath: ticket.storagePath,
+      eventId: ctx.eventId,
+      storagePath: ctx.storagePath,
       audioBytes,
       uploadMode: "signed_write_url__rtdb_free"
     },
     "voice nudge audio verified in Cloud Storage after client direct upload"
   );
 
-  const file = getVoiceNudgeBucket().file(ticket.storagePath);
+  const file = getVoiceNudgeBucket().file(ctx.storagePath);
   let signedAudioUrl: string;
   try {
-    signedAudioUrl = await createVoiceNudgeSignedReadUrl(ticket.storagePath, ticket.expiresAt * 1000);
+    signedAudioUrl = await createVoiceNudgeSignedReadUrl(ctx.storagePath, ctx.expiresAt * 1000);
   } catch (error) {
     logger.error(
       {
         checkpoint: "VOICE-NUDGE-BE-E1",
         category: "unexpected",
-        eventId: ticket.eventId,
-        storagePath: ticket.storagePath,
+        eventId: ctx.eventId,
+        storagePath: ctx.storagePath,
         error: describeError(error)
       },
       "voice nudge signed read URL generation failed, rolling back Cloud Storage object"
@@ -198,7 +225,7 @@ export async function completeVoiceNudgeUpload(input: CompleteVoiceNudgeUploadIn
     throw error;
   }
 
-  const deliveryTokens = ticket.recipientDevices.map((device) => ({
+  const deliveryTokens = ctx.recipientDevices.map((device) => ({
     device,
     deliveryId: `${device.userId}_${device.deviceId}`,
     token: createDeliveryToken()
@@ -209,13 +236,13 @@ export async function completeVoiceNudgeUpload(input: CompleteVoiceNudgeUploadIn
       {
         checkpoint: "VOICE-NUDGE-BE-W1",
         category: "expected",
-        eventId: ticket.eventId,
+        eventId: ctx.eventId,
         reason: "no_recipients"
       },
       "voice nudge has no active recipient devices, purging Cloud Storage object immediately"
     );
     await file.delete({ ignoreNotFound: true }).catch(() => undefined);
-    return nudgeResult(ticket.eventId, ticket.recipientUserIds.length, 0, 0, 0);
+    return nudgeResult(ctx.eventId, ctx.recipientUserIds.length, 0, 0, 0);
   }
 
   const pushResult = await sendAndroidDataPushes(
@@ -223,12 +250,12 @@ export async function completeVoiceNudgeUpload(input: CompleteVoiceNudgeUploadIn
       token: delivery.device.fcmToken,
       data: {
         type: "voice_nudge",
-        eventId: ticket.eventId,
-        groupId: ticket.groupId,
-        senderUserId: ticket.senderUserId,
-        senderName: ticket.senderName,
-        durationMs: String(ticket.durationMs),
-        expiresAt: String(ticket.expiresAt),
+        eventId: ctx.eventId,
+        groupId: ctx.groupId,
+        senderUserId: ctx.senderUserId,
+        senderName: ctx.senderName,
+        durationMs: String(ctx.durationMs),
+        expiresAt: String(ctx.expiresAt),
         audioUrl: signedAudioUrl
       }
     })),
@@ -239,9 +266,9 @@ export async function completeVoiceNudgeUpload(input: CompleteVoiceNudgeUploadIn
     {
       checkpoint: "VOICE-NUDGE-BE-03",
       category: "expected",
-      eventId: ticket.eventId,
+      eventId: ctx.eventId,
       audioBytes,
-      targetDevices: ticket.recipientDevices.length,
+      targetDevices: ctx.recipientDevices.length,
       sent: pushResult.successCount,
       failed: pushResult.failureCount,
       deliveryMode: "signed_url",
@@ -252,9 +279,9 @@ export async function completeVoiceNudgeUpload(input: CompleteVoiceNudgeUploadIn
   );
 
   return nudgeResult(
-    ticket.eventId,
-    ticket.recipientUserIds.length,
-    ticket.recipientDevices.length,
+    ctx.eventId,
+    ctx.recipientUserIds.length,
+    ctx.recipientDevices.length,
     pushResult.successCount,
     pushResult.failureCount
   );

@@ -6,6 +6,7 @@ import { asyncHandler } from "../http/asyncHandler.js";
 import {
   acknowledgeVoiceNudge,
   completeVoiceNudgeUpload,
+  completeVoiceNudgeUploadWithContext,
   createVoiceNudge,
   initiateVoiceNudgeUpload,
   resolveVoiceNudgeAudioRedirect,
@@ -64,7 +65,7 @@ const voiceNudgeUploadSchema = z.discriminatedUnion("targetScope", [
 ]);
 
 const voiceNudgeCompleteSchema = z.object({
-  uploadTicket: z.string().min(1)
+  uploadTicket: z.string().min(1).optional()
 });
 
 const ringNudgeSchema = z.object({
@@ -236,9 +237,10 @@ export function createNotificationRoutes() {
       // Fall back to RTDB reads until all clients are updated.
       let recipientDevices = body.recipientDevices;
       let senderName = body.senderName;
+      let db: ReturnType<typeof getRealtimeDatabase> | undefined;
 
       if (!recipientDevices || !senderName) {
-        const db = getRealtimeDatabase();
+        db = getRealtimeDatabase();
 
         // Resolve recipients
         const targetUserId =
@@ -300,6 +302,30 @@ export function createNotificationRoutes() {
         recipientDevices: recipientDevices!,
         senderName: senderName!
       });
+
+      // Backward compat: write RTDB metadata so the legacy /complete
+      // handler can find it when the old client sends {} instead of uploadTicket.
+      if (!body.recipientDevices || !body.senderName) {
+        const now = Math.floor(Date.now() / 1000);
+        const rtUserIds = [...new Set((recipientDevices ?? []).map((d: { userId: string }) => d.userId))]
+          .filter((uid: string) => uid !== authRequest.auth.uid);
+        await db!.ref().update({
+          [`voiceNudges/${result.notificationEventId}/eventId`]: result.notificationEventId,
+          [`voiceNudges/${result.notificationEventId}/groupId`]: groupId,
+          [`voiceNudges/${result.notificationEventId}/senderUserId`]: authRequest.auth.uid,
+          [`voiceNudges/${result.notificationEventId}/storagePath`]: result.storagePath,
+          [`voiceNudges/${result.notificationEventId}/expiresAt`]: result.expiresAt,
+          [`voiceNudges/${result.notificationEventId}/uploadExpiresAt`]: result.uploadExpiresAt,
+          [`voiceNudges/${result.notificationEventId}/durationMs`]: body.durationMs,
+          [`voiceNudges/${result.notificationEventId}/targetScope`]: body.targetScope,
+          [`voiceNudges/${result.notificationEventId}/targetUserIds`]: rtUserIds,
+          [`voiceNudges/${result.notificationEventId}/recipientDevices`]: recipientDevices,
+          [`voiceNudges/${result.notificationEventId}/senderName`]: senderName,
+          [`voiceNudges/${result.notificationEventId}/voiceNudgeState`]: "awaiting_upload",
+          [`voiceNudges/${result.notificationEventId}/createdAt`]: now
+        }).catch(() => undefined);
+      }
+
       response.status(201).json(result);
     })
   );
@@ -308,10 +334,78 @@ export function createNotificationRoutes() {
     "/v1/groups/:groupId/voice-nudges/:eventId/complete",
     requireFirebaseAuth,
     asyncHandler(async (request, response) => {
+      const authRequest = request as AuthenticatedRequest;
+      const groupId = z.string().min(1).parse(request.params.groupId);
+      const eventId = z.string().min(1).parse(request.params.eventId);
       const body = voiceNudgeCompleteSchema.parse(request.body);
-      const result = await completeVoiceNudgeUpload({
-        uploadTicket: body.uploadTicket
+
+      if (body.uploadTicket) {
+        // New zero-RTDB flow
+        const result = await completeVoiceNudgeUpload({ uploadTicket: body.uploadTicket });
+        response.status(200).json(result);
+        return;
+      }
+
+      // Legacy fallback: old client sends {} — read context from RTDB
+      const db = getRealtimeDatabase();
+      const snap = await db.ref(`voiceNudges/${eventId}`).get();
+      if (!snap.exists()) {
+        response.status(404).json({ error: "voice_nudge_not_found", message: "Voice nudge does not exist." });
+        return;
+      }
+      const v = snap.val() as Record<string, unknown>;
+      if (String(v.groupId ?? "") !== groupId) {
+        response.status(404).json({ error: "voice_nudge_not_found", message: "Voice nudge does not exist." });
+        return;
+      }
+      if (String(v.senderUserId ?? "") !== authRequest.auth.uid) {
+        response.status(403).json({ error: "voice_nudge_forbidden", message: "Only the sender can complete this upload." });
+        return;
+      }
+
+      const state = String(v.voiceNudgeState ?? "");
+      if (state !== "awaiting_upload") {
+        if (state === "pending" || state === "sent" || state === "completed") {
+          response.status(200).json({ notificationEventId: eventId, recipientUsers: 0, targetDevices: 0, sent: 0, failed: 0, skipped: 0, alreadyComplete: true });
+          return;
+        }
+        response.status(409).json({ error: "voice_nudge_not_awaiting_upload", message: "Voice nudge is not waiting for an upload." });
+        return;
+      }
+
+      const uploadExpiresAt = Number(v.uploadExpiresAt) || 0;
+      if (uploadExpiresAt > 0 && uploadExpiresAt < Math.floor(Date.now() / 1000)) {
+        await db.ref(`voiceNudges/${eventId}`).update({ voiceNudgeState: "upload_expired" }).catch(() => undefined);
+        response.status(410).json({ error: "voice_nudge_upload_expired", message: "Voice nudge upload URL has expired." });
+        return;
+      }
+
+      const storagePath = String(v.storagePath ?? "");
+      if (!storagePath) {
+        response.status(500).json({ error: "voice_nudge_storage_missing", message: "Voice nudge storage path is missing." });
+        return;
+      }
+
+      const recipientDevices = Array.isArray(v.recipientDevices)
+        ? (v.recipientDevices as Array<{ userId: string; deviceId: string; fcmToken: string }>)
+        : [];
+      const recipientUserIds = Array.isArray(v.targetUserIds) ? v.targetUserIds.map(String) : [];
+
+      const result = await completeVoiceNudgeUploadWithContext({
+        eventId,
+        groupId,
+        senderUserId: authRequest.auth.uid,
+        senderName: String(v.senderName ?? "Someone"),
+        durationMs: Number(v.durationMs) || 0,
+        expiresAt: Number(v.expiresAt) || (Math.floor(Date.now() / 1000) + 600),
+        storagePath,
+        recipientUserIds,
+        recipientDevices
       });
+
+      // Clean up RTDB after dispatch
+      await db.ref(`voiceNudges/${eventId}`).update({ voiceNudgeState: "sent" }).catch(() => undefined);
+
       response.status(200).json(result);
     })
   );
