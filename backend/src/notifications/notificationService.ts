@@ -117,12 +117,6 @@ export async function sendFriendLiveNotification(input: FriendLiveInput) {
 
   await writeDeliveries(notificationEventId, recipientDevices, pushResult);
 
-  // Delete the notification event record now that FCM has been attempted.
-  await db
-    .ref(`notificationEvents/${input.groupId}/${notificationEventId}`)
-    .remove()
-    .catch(() => undefined);
-
   await writeStatusEvent(input.groupId, input.senderUserId, "friend_live_notification_sent", {
     notificationEventId
   });
@@ -193,11 +187,11 @@ export async function sendNudgeNotification(input: NudgeInput) {
 
   await writeDeliveries(notificationEventId, recipientDevices, pushResult);
 
-  // Delete the rate-limit event record now that FCM has been attempted.
-  await getRealtimeDatabase()
-    .ref(`notificationEvents/${input.groupId}/${notificationEventId}`)
-    .remove()
-    .catch(() => undefined);
+  // NOTE: Do NOT delete notificationEvents/{groupId}/{eventId} here.
+  // respondToNudge needs the event record to validate the sender,
+  // recipients, and event type when the recipient accepts/declines/snoozes.
+  // The record is cleaned up naturally as new events push old ones out
+  // of the rate-limiter window.
 
   await writeStatusEvent(input.groupId, input.senderUserId, "nudge_sent", {
     notificationEventId,
