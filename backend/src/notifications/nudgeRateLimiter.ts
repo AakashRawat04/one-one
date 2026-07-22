@@ -25,22 +25,9 @@ type NotificationEventRecord = {
  * (backend/src/config.ts) stay consistent across every nudge type instead
  * of being duplicated per send-path.
  */
-/**
- * Maximum number of notification event records the rate limiter will
- * download from RTDB. 50 is well above every configured limit
- * (NUDGE_RATE_LIMIT_MAX_PER_GROUP=30, NUDGE_SPAM_MAX_PER_WINDOW=10)
- * so the limiter can enforce all rules without ever pulling unbounded
- * history over the wire.
- */
-const rateLimitQueryCap = 50;
-
 export async function enforceNudgeRateLimits(input: EnforceNudgeRateLimitsInput) {
   const now = nowSeconds();
-  const snapshot = await getRealtimeDatabase()
-    .ref(`notificationEvents/${input.groupId}`)
-    .orderByChild("createdAt")
-    .limitToLast(rateLimitQueryCap)
-    .get();
+  const snapshot = await getRealtimeDatabase().ref(`notificationEvents/${input.groupId}`).get();
   if (!snapshot.exists() || !isRecord(snapshot.val())) return;
 
   const senderEvents = Object.values(snapshot.val() as Record<string, unknown>).filter(

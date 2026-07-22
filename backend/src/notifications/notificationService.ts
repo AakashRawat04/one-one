@@ -358,11 +358,7 @@ async function listRecentNotificationEvents(input: {
   eventType: string;
   since: number;
 }) {
-  const snapshot = await getRealtimeDatabase()
-    .ref(`notificationEvents/${input.groupId}`)
-    .orderByChild("createdAt")
-    .limitToLast(20)
-    .get();
+  const snapshot = await getRealtimeDatabase().ref(`notificationEvents/${input.groupId}`).get();
   if (!snapshot.exists() || !isRecord(snapshot.val())) return [];
 
   return Object.values(snapshot.val() as Record<string, unknown>)

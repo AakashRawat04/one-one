@@ -1,11 +1,8 @@
 import express, { Router } from "express";
 import { z } from "zod";
+import { getRealtimeDatabase } from "../firebase/database.js";
 import { requireFirebaseAuth, type AuthenticatedRequest } from "../firebase/auth.js";
 import { asyncHandler } from "../http/asyncHandler.js";
-import {
-  sendFriendLiveNotification,
-  sendNudgeNotification
-} from "../notifications/notificationService.js";
 import {
   acknowledgeVoiceNudge,
   completeVoiceNudgeUpload,
@@ -16,6 +13,10 @@ import {
 } from "../notifications/voiceNudgeService.js";
 import { maxVoiceNudgeBytes } from "../notifications/voiceNudgeValidation.js";
 import { respondToNudge } from "../notifications/nudgeResponseService.js";
+import {
+  sendFriendLiveNotification,
+  sendNudgeNotification
+} from "../notifications/notificationService.js";
 
 const friendLiveSchema = z.object({
   deviceId: z.string().min(1),
@@ -49,14 +50,16 @@ const voiceNudgeUploadSchema = z.discriminatedUnion("targetScope", [
     targetScope: z.literal("single_friend"),
     targetUserId: z.string().min(1),
     durationMs: z.number().int().positive(),
-    recipientDevices: z.array(recipientDeviceSchema).min(1),
-    senderName: z.string().min(1)
+    // New fields — client provides these when reading RTDB directly.
+    // Optional during migration; backend falls back to RTDB reads if missing.
+    recipientDevices: z.array(recipientDeviceSchema).min(1).optional(),
+    senderName: z.string().min(1).optional()
   }),
   z.object({
     targetScope: z.literal("all_friends"),
     durationMs: z.number().int().positive(),
-    recipientDevices: z.array(recipientDeviceSchema).min(1),
-    senderName: z.string().min(1)
+    recipientDevices: z.array(recipientDeviceSchema).min(1).optional(),
+    senderName: z.string().min(1).optional()
   })
 ]);
 
@@ -68,8 +71,9 @@ const ringNudgeSchema = z.object({
   targetScope: z.enum(["single_friend", "all_friends"]),
   targetUserId: z.string().min(1).optional(),
   durationSeconds: z.union([z.literal(3), z.literal(5), z.literal(10)]),
-  recipientDevices: z.array(recipientDeviceSchema).min(1),
-  senderName: z.string().min(1)
+  // Optional during migration; backend falls back to RTDB reads if missing.
+  recipientDevices: z.array(recipientDeviceSchema).min(1).optional(),
+  senderName: z.string().min(1).optional()
 });
 
 const voiceNudgeAckSchema = z.object({
@@ -153,14 +157,68 @@ export function createNotificationRoutes() {
       const authRequest = request as AuthenticatedRequest;
       const groupId = z.string().min(1).parse(request.params.groupId);
       const body = ringNudgeSchema.parse(request.body);
+
+      // Backward compat: old clients don't send recipientDevices/senderName.
+      let recipientDevices = body.recipientDevices;
+      let senderName = body.senderName;
+
+      if (!recipientDevices || !senderName) {
+        const db = getRealtimeDatabase();
+
+        const targetUserId = body.targetUserId;
+        let recipientUserIds: string[];
+        if (body.targetScope === "single_friend" && targetUserId) {
+          recipientUserIds = targetUserId !== authRequest.auth.uid
+            ? [targetUserId] : [];
+        } else {
+          const snap = await db.ref(`groupMembers/${groupId}`).get();
+          recipientUserIds = [];
+          if (snap.exists()) {
+            const members = snap.val() as Record<string, unknown>;
+            for (const [uid, val] of Object.entries(members)) {
+              if (
+                uid !== authRequest.auth.uid &&
+                typeof val === "object" && val !== null &&
+                (val as Record<string, unknown>).memberState === "active"
+              ) {
+                recipientUserIds.push(uid);
+              }
+            }
+          }
+        }
+
+        const devices: Array<{ userId: string; deviceId: string; fcmToken: string }> = [];
+        for (const uid of recipientUserIds) {
+          const devSnap = await db.ref(`userDevices/${uid}`).get();
+          if (!devSnap.exists()) continue;
+          const devs = devSnap.val() as Record<string, unknown>;
+          for (const [devId, dv] of Object.entries(devs)) {
+            if (
+              typeof dv === "object" && dv !== null &&
+              (dv as Record<string, unknown>).deviceState === "active" &&
+              (dv as Record<string, unknown>).platform === "android"
+            ) {
+              const tok = (dv as Record<string, unknown>).fcmToken;
+              if (typeof tok === "string" && tok) {
+                devices.push({ userId: uid, deviceId: devId, fcmToken: tok });
+              }
+            }
+          }
+        }
+        recipientDevices = devices;
+
+        const nameSnap = await db.ref(`users/${authRequest.auth.uid}/displayName`).get();
+        senderName = nameSnap.val()?.toString() || "Someone";
+      }
+
       const result = await sendRingNudge({
         groupId,
         senderUserId: authRequest.auth.uid,
         targetScope: body.targetScope,
         targetUserId: body.targetUserId,
         durationSeconds: body.durationSeconds,
-        recipientDevices: body.recipientDevices,
-        senderName: body.senderName
+        recipientDevices: recipientDevices!,
+        senderName: senderName!
       });
       response.status(200).json(result);
     })
@@ -173,14 +231,74 @@ export function createNotificationRoutes() {
       const authRequest = request as AuthenticatedRequest;
       const groupId = z.string().min(1).parse(request.params.groupId);
       const body = voiceNudgeUploadSchema.parse(request.body);
+
+      // Backward compat: old clients don't send recipientDevices/senderName.
+      // Fall back to RTDB reads until all clients are updated.
+      let recipientDevices = body.recipientDevices;
+      let senderName = body.senderName;
+
+      if (!recipientDevices || !senderName) {
+        const db = getRealtimeDatabase();
+
+        // Resolve recipients
+        const targetUserId =
+          "targetUserId" in body ? body.targetUserId : undefined;
+        let recipientUserIds: string[];
+        if (targetUserId) {
+          recipientUserIds = targetUserId !== authRequest.auth.uid
+            ? [targetUserId]
+            : [];
+        } else {
+          const memberSnap = await db.ref(`groupMembers/${groupId}`).get();
+          recipientUserIds = [];
+          if (memberSnap.exists()) {
+            const members = memberSnap.val() as Record<string, unknown>;
+            for (const [uid, val] of Object.entries(members)) {
+              if (
+                uid !== authRequest.auth.uid &&
+                typeof val === "object" && val !== null &&
+                (val as Record<string, unknown>).memberState === "active"
+              ) {
+                recipientUserIds.push(uid);
+              }
+            }
+          }
+        }
+
+        // Read recipient devices (FCM tokens) from RTDB
+        const devices: Array<{ userId: string; deviceId: string; fcmToken: string }> = [];
+        for (const uid of recipientUserIds) {
+          const devSnap = await db.ref(`userDevices/${uid}`).get();
+          if (!devSnap.exists()) continue;
+          const devs = devSnap.val() as Record<string, unknown>;
+          for (const [devId, dv] of Object.entries(devs)) {
+            if (
+              typeof dv === "object" && dv !== null &&
+              (dv as Record<string, unknown>).deviceState === "active" &&
+              (dv as Record<string, unknown>).platform === "android"
+            ) {
+              const tok = (dv as Record<string, unknown>).fcmToken;
+              if (typeof tok === "string" && tok) {
+                devices.push({ userId: uid, deviceId: devId, fcmToken: tok });
+              }
+            }
+          }
+        }
+        recipientDevices = devices;
+
+        // Read display name from RTDB
+        const nameSnap = await db.ref(`users/${authRequest.auth.uid}/displayName`).get();
+        senderName = nameSnap.val()?.toString() || "Someone";
+      }
+
       const result = await initiateVoiceNudgeUpload({
         groupId,
         senderUserId: authRequest.auth.uid,
         targetScope: body.targetScope,
         targetUserId: "targetUserId" in body ? body.targetUserId : undefined,
         durationMs: body.durationMs,
-        recipientDevices: body.recipientDevices,
-        senderName: body.senderName
+        recipientDevices: recipientDevices!,
+        senderName: senderName!
       });
       response.status(201).json(result);
     })
