@@ -2,7 +2,6 @@ import express, { Router } from "express";
 import { z } from "zod";
 import { requireFirebaseAuth, type AuthenticatedRequest } from "../firebase/auth.js";
 import { asyncHandler } from "../http/asyncHandler.js";
-import { logger } from "../logger.js";
 import {
   sendFriendLiveNotification,
   sendNudgeNotification
@@ -39,22 +38,38 @@ const voiceNudgeQuerySchema = z.object({
   targetUserId: z.string().min(1).optional()
 });
 
+const recipientDeviceSchema = z.object({
+  userId: z.string().min(1),
+  deviceId: z.string().min(1),
+  fcmToken: z.string().min(1)
+});
+
 const voiceNudgeUploadSchema = z.discriminatedUnion("targetScope", [
   z.object({
     targetScope: z.literal("single_friend"),
     targetUserId: z.string().min(1),
-    durationMs: z.number().int().positive()
+    durationMs: z.number().int().positive(),
+    recipientDevices: z.array(recipientDeviceSchema).min(1),
+    senderName: z.string().min(1)
   }),
   z.object({
     targetScope: z.literal("all_friends"),
-    durationMs: z.number().int().positive()
+    durationMs: z.number().int().positive(),
+    recipientDevices: z.array(recipientDeviceSchema).min(1),
+    senderName: z.string().min(1)
   })
 ]);
+
+const voiceNudgeCompleteSchema = z.object({
+  uploadTicket: z.string().min(1)
+});
 
 const ringNudgeSchema = z.object({
   targetScope: z.enum(["single_friend", "all_friends"]),
   targetUserId: z.string().min(1).optional(),
-  durationSeconds: z.union([z.literal(3), z.literal(5), z.literal(10)])
+  durationSeconds: z.union([z.literal(3), z.literal(5), z.literal(10)]),
+  recipientDevices: z.array(recipientDeviceSchema).min(1),
+  senderName: z.string().min(1)
 });
 
 const voiceNudgeAckSchema = z.object({
@@ -143,7 +158,9 @@ export function createNotificationRoutes() {
         senderUserId: authRequest.auth.uid,
         targetScope: body.targetScope,
         targetUserId: body.targetUserId,
-        durationSeconds: body.durationSeconds
+        durationSeconds: body.durationSeconds,
+        recipientDevices: body.recipientDevices,
+        senderName: body.senderName
       });
       response.status(200).json(result);
     })
@@ -161,7 +178,9 @@ export function createNotificationRoutes() {
         senderUserId: authRequest.auth.uid,
         targetScope: body.targetScope,
         targetUserId: "targetUserId" in body ? body.targetUserId : undefined,
-        durationMs: body.durationMs
+        durationMs: body.durationMs,
+        recipientDevices: body.recipientDevices,
+        senderName: body.senderName
       });
       response.status(201).json(result);
     })
@@ -171,13 +190,9 @@ export function createNotificationRoutes() {
     "/v1/groups/:groupId/voice-nudges/:eventId/complete",
     requireFirebaseAuth,
     asyncHandler(async (request, response) => {
-      const authRequest = request as AuthenticatedRequest;
-      const groupId = z.string().min(1).parse(request.params.groupId);
-      const eventId = z.string().min(1).parse(request.params.eventId);
+      const body = voiceNudgeCompleteSchema.parse(request.body);
       const result = await completeVoiceNudgeUpload({
-        groupId,
-        eventId,
-        senderUserId: authRequest.auth.uid
+        uploadTicket: body.uploadTicket
       });
       response.status(200).json(result);
     })
@@ -217,32 +232,16 @@ export function createNotificationRoutes() {
     })
   );
 
+  // Deprecated — audio is delivered via signed URL in the FCM payload.
+  // Kept for backward compatibility; throws 410 for any caller.
   router.get(
     "/v1/voice-nudges/:eventId/audio",
     asyncHandler(async (request, response) => {
       const eventId = z.string().min(1).parse(request.params.eventId);
       const token = request.header("x-one-one-delivery-token") ?? "";
-      // Compatibility path for older clients: validate the delivery token,
-      // then 302 to a Cloud Storage signed URL so audio bytes never leave
-      // Storage through the API process.
-      const { signedUrl, deliveryId } = await resolveVoiceNudgeAudioRedirect(eventId, token);
-      logger.info(
-        {
-          checkpoint: "VOICE-NUDGE-BE-05",
-          category: "expected",
-          eventId,
-          deliveryId,
-          egress: "signed_url_redirect"
-        },
-        "voice nudge audio redirect issued to recipient device"
-      );
-      response
-        .status(302)
-        .set({
-          location: signedUrl,
-          "cache-control": "private, no-store, max-age=0"
-        })
-        .end();
+      // resolveVoiceNudgeAudioRedirect now throws HttpError(410) — audio
+      // must be fetched via the signed URL in the FCM data payload.
+      await resolveVoiceNudgeAudioRedirect(eventId, token);
     })
   );
 

@@ -116,6 +116,13 @@ export async function sendFriendLiveNotification(input: FriendLiveInput) {
   });
 
   await writeDeliveries(notificationEventId, recipientDevices, pushResult);
+
+  // Delete the notification event record now that FCM has been attempted.
+  await db
+    .ref(`notificationEvents/${input.groupId}/${notificationEventId}`)
+    .remove()
+    .catch(() => undefined);
+
   await writeStatusEvent(input.groupId, input.senderUserId, "friend_live_notification_sent", {
     notificationEventId
   });
@@ -185,6 +192,13 @@ export async function sendNudgeNotification(input: NudgeInput) {
   );
 
   await writeDeliveries(notificationEventId, recipientDevices, pushResult);
+
+  // Delete the rate-limit event record now that FCM has been attempted.
+  await getRealtimeDatabase()
+    .ref(`notificationEvents/${input.groupId}/${notificationEventId}`)
+    .remove()
+    .catch(() => undefined);
+
   await writeStatusEvent(input.groupId, input.senderUserId, "nudge_sent", {
     notificationEventId,
     targetScope: input.targetScope
@@ -344,7 +358,11 @@ async function listRecentNotificationEvents(input: {
   eventType: string;
   since: number;
 }) {
-  const snapshot = await getRealtimeDatabase().ref(`notificationEvents/${input.groupId}`).get();
+  const snapshot = await getRealtimeDatabase()
+    .ref(`notificationEvents/${input.groupId}`)
+    .orderByChild("createdAt")
+    .limitToLast(20)
+    .get();
   if (!snapshot.exists() || !isRecord(snapshot.val())) return [];
 
   return Object.values(snapshot.val() as Record<string, unknown>)
