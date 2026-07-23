@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { getRealtimeDatabase } from "../firebase/database.js";
 import { sendAndroidDataPushes } from "../firebase/messaging.js";
 import {
   getVoiceNudgeBucket,
@@ -245,6 +246,22 @@ async function dispatchVoiceNudgeFromContext(ctx: {
     return nudgeResult(ctx.eventId, ctx.recipientUserIds.length, 0, 0, 0);
   }
 
+  // Write a lightweight notification event so the respond-to-nudge endpoint
+  // can validate voice-nudge responses and notification action buttons work.
+  const baseUrl = config.PUBLIC_API_BASE_URL.replace(/\/$/, "");
+  const responseUrl = `${baseUrl}/v1/groups/${ctx.groupId}/nudges/${ctx.eventId}/respond`;
+  await writeNudgeNotificationEvent({
+    groupId: ctx.groupId,
+    eventId: ctx.eventId,
+    senderUserId: ctx.senderUserId,
+    eventType: "voice_nudge",
+    targetScope: "all_friends",
+    targetUserIds: ctx.recipientUserIds.filter((uid) => uid !== ctx.senderUserId),
+    createdAt: nowSeconds(),
+    responseUrl,
+    senderName: ctx.senderName
+  });
+
   const pushResult = await sendAndroidDataPushes(
     deliveryTokens.map((delivery) => ({
       token: delivery.device.fcmToken,
@@ -256,7 +273,8 @@ async function dispatchVoiceNudgeFromContext(ctx: {
         senderName: ctx.senderName,
         durationMs: String(ctx.durationMs),
         expiresAt: String(ctx.expiresAt),
-        audioUrl: signedAudioUrl
+        audioUrl: signedAudioUrl,
+        responseUrl
       }
     })),
     voiceNudgePushTtlMs
@@ -349,6 +367,27 @@ export async function sendRingNudge(input: SendRingNudgeInput) {
     return nudgeResult(eventId, 0, 0, 0, 0);
   }
 
+  const recipientUserIds = [...new Set(input.recipientDevices.map((d) => d.userId))]
+    .filter((uid) => uid !== input.senderUserId);
+
+  // Write a lightweight notification event so the respond-to-nudge endpoint
+  // can validate ring-nudge responses and notification action buttons work.
+  const now = nowSeconds();
+  const baseUrl = config.PUBLIC_API_BASE_URL.replace(/\/$/, "");
+  const responseUrl = `${baseUrl}/v1/groups/${input.groupId}/nudges/${eventId}/respond`;
+  await writeNudgeNotificationEvent({
+    groupId: input.groupId,
+    eventId,
+    senderUserId: input.senderUserId,
+    eventType: "ring_nudge",
+    targetScope: input.targetScope,
+    targetUserId: input.targetUserId,
+    targetUserIds: recipientUserIds,
+    createdAt: now,
+    responseUrl,
+    senderName: input.senderName
+  });
+
   const pushResult = await sendAndroidDataPushes(
     input.recipientDevices.map((device) => ({
       token: device.fcmToken,
@@ -358,7 +397,8 @@ export async function sendRingNudge(input: SendRingNudgeInput) {
         groupId: input.groupId,
         senderUserId: input.senderUserId,
         senderName: input.senderName,
-        durationMs: String(input.durationSeconds * 1000)
+        durationMs: String(input.durationSeconds * 1000),
+        responseUrl
       }
     })),
     ringNudgePushTtlMs
@@ -366,7 +406,7 @@ export async function sendRingNudge(input: SendRingNudgeInput) {
 
   return nudgeResult(
     eventId,
-    [...new Set(input.recipientDevices.map((d) => d.userId))].length,
+    recipientUserIds.length,
     input.recipientDevices.length,
     pushResult.successCount,
     pushResult.failureCount
@@ -449,6 +489,63 @@ function nudgeResult(
     skipped: recipientUsers === 0 || targetDevices === 0 ? 1 : 0,
     rtdbCalls: 0
   };
+}
+
+/**
+ * Writes a minimal notification event to RTDB so the respond-to-nudge
+ * endpoint can validate ring/voice nudge responses (which are otherwise
+ * RTDB-free for the send path). This is a single small write — far less
+ * overhead than the legacy full-state approach.
+ */
+async function writeNudgeNotificationEvent(input: {
+  groupId: string;
+  eventId: string;
+  senderUserId: string;
+  eventType: "ring_nudge" | "voice_nudge";
+  targetScope: "single_friend" | "all_friends";
+  targetUserId?: string;
+  targetUserIds: string[];
+  createdAt: number;
+  responseUrl: string;
+  senderName: string;
+}) {
+  try {
+    const targetUserIds = input.targetUserId
+      ? [input.targetUserId].filter((uid) => uid !== input.senderUserId)
+      : input.targetUserIds;
+    await getRealtimeDatabase().ref(`notificationEvents/${input.groupId}/${input.eventId}`).set({
+      notificationEventId: input.eventId,
+      groupId: input.groupId,
+      senderUserId: input.senderUserId,
+      eventType: input.eventType,
+      targetScope: input.targetScope,
+      targetUserIds,
+      createdAt: input.createdAt,
+      metadata: { responseUrl: input.responseUrl, senderName: input.senderName }
+    });
+    logger.info(
+      {
+        checkpoint: "NUDGE-EVENT-BE-01",
+        category: "expected",
+        eventId: input.eventId,
+        eventType: input.eventType,
+        targetUserIds: targetUserIds.length
+      },
+      "notification event written for ring/voice nudge response validation"
+    );
+  } catch (error) {
+    // Non-fatal — the nudge still delivers even if the response record fails.
+    logger.warn(
+      {
+        checkpoint: "NUDGE-EVENT-BE-W1",
+        category: "expected",
+        eventId: input.eventId,
+        eventType: input.eventType,
+        error: describeError(error)
+      },
+      "failed to write notification event for ring/voice nudge; respond actions may not work"
+    );
+  }
 }
 
 function nowSeconds() {
