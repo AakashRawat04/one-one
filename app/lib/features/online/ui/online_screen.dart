@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:livekit_client/livekit_client.dart';
 
+import '../../../core/firebase/app_database.dart';
 import '../../groups/models/group_summary.dart';
 import '../../identity/models/identity_session.dart';
 import '../../talk/data/talk_repository.dart';
@@ -10,6 +11,7 @@ import '../../talk/models/talk_session.dart';
 import '../data/online_repository.dart';
 import '../livekit_status.dart';
 import '../models/online_session.dart';
+import '../presence_config.dart';
 
 class OnlineScreen extends StatefulWidget {
   const OnlineScreen({
@@ -39,14 +41,29 @@ class _OnlineScreenState extends State<OnlineScreen> {
   Room? _room;
   EventsListener<RoomEvent>? _roomListener;
   Timer? _heartbeatTimer;
+  Timer? _inactivityTimer;
+  Timer? _usagePersistTimer;
+  DateTime? _lastVoiceActivityAt;
+  int _todayOnlineSeconds = 0;
+  String? _todayUsageDateKey;
   String _state = 'away';
   String? _message;
   bool _busy = false;
   bool _talkBusy = false;
 
+  String get _todayDateKey {
+    final now = DateTime.now().toUtc();
+    return '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+  }
+
   @override
   void dispose() {
     _heartbeatTimer?.cancel();
+    _inactivityTimer?.cancel();
+    _usagePersistTimer?.cancel();
+    if (_todayOnlineSeconds > 0 && _session != null) {
+      unawaited(_persistDailyUsage());
+    }
     final activeTalk = _talkSession;
     if (activeTalk != null) {
       unawaited(_talkRepository.stopTalk(activeTalk, reason: 'screen_closed'));
@@ -61,6 +78,27 @@ class _OnlineScreenState extends State<OnlineScreen> {
       _state = 'connecting';
       _message = null;
     });
+
+    // Check daily usage cap.
+    final dateKey = _todayDateKey;
+    if (_todayUsageDateKey != dateKey) {
+      _todayUsageDateKey = dateKey;
+      _todayOnlineSeconds = 0;
+    }
+    final loadedSeconds = await _loadDailyUsage();
+    if (loadedSeconds > _todayOnlineSeconds) {
+      _todayOnlineSeconds = loadedSeconds;
+    }
+    if (_todayOnlineSeconds >= PresenceConfig.dailyUsageCap.inSeconds) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _state = 'away';
+        _message = 'Daily usage limit reached (${PresenceConfig.dailyUsageCap.inMinutes} min). '
+            'You can go online again tomorrow.';
+      });
+      return;
+    }
 
     OnlineSession? createdSession;
     try {
@@ -83,6 +121,8 @@ class _OnlineScreenState extends State<OnlineScreen> {
         _state = 'live';
         _message = LiveKitStatus.live;
       });
+      _scheduleInactivityCheck();
+      _startUsageTracking();
     } catch (error) {
       await _disconnectLiveKit();
       if (createdSession != null) {
@@ -123,6 +163,14 @@ class _OnlineScreenState extends State<OnlineScreen> {
       }
       _heartbeatTimer?.cancel();
       _heartbeatTimer = null;
+      _inactivityTimer?.cancel();
+      _inactivityTimer = null;
+      _lastVoiceActivityAt = null;
+      _usagePersistTimer?.cancel();
+      _usagePersistTimer = null;
+      if (_todayOnlineSeconds > 0) {
+        unawaited(_persistDailyUsage());
+      }
       await _disconnectLiveKit();
       await _onlineRepository.goAway(session);
       setState(() {
@@ -159,6 +207,7 @@ class _OnlineScreenState extends State<OnlineScreen> {
         _state = 'talking';
         _message = LiveKitStatus.talking;
       });
+      _recordVoiceActivity();
     } catch (error) {
       if (startedTalk != null) {
         await _talkRepository.stopTalk(startedTalk, reason: 'mic_failed');
@@ -184,6 +233,7 @@ class _OnlineScreenState extends State<OnlineScreen> {
       _talkSession = null;
       _state = 'live';
     });
+    _recordVoiceActivity();
 
     try {
       await _setMicrophoneEnabled(false);
@@ -262,6 +312,9 @@ class _OnlineScreenState extends State<OnlineScreen> {
         final remoteSpeakers = event.speakers.where(
           (speaker) => speaker.identity != room.localParticipant?.identity,
         );
+        if (event.speakers.isNotEmpty) {
+          _recordVoiceActivity();
+        }
         if (remoteSpeakers.isNotEmpty) {
           _setMessage(LiveKitStatus.receivingVoice);
         }
@@ -307,6 +360,79 @@ class _OnlineScreenState extends State<OnlineScreen> {
     setState(() {
       _state = state;
       _message = message;
+    });
+  }
+
+  void _recordVoiceActivity() {
+    if (_session == null) return;
+    _lastVoiceActivityAt = DateTime.now();
+    _scheduleInactivityCheck();
+  }
+
+  void _scheduleInactivityCheck() {
+    _inactivityTimer?.cancel();
+    if (_session == null) return;
+    _inactivityTimer = Timer(PresenceConfig.inactivityTimeout, () {
+      if (!mounted || _session == null) return;
+      final lastActivity = _lastVoiceActivityAt;
+      if (lastActivity != null &&
+          DateTime.now().difference(lastActivity) <
+              PresenceConfig.inactivityTimeout) {
+        _scheduleInactivityCheck();
+        return;
+      }
+      setState(() => _message = 'Room closed due to inactivity.');
+      unawaited(_goAway());
+    });
+  }
+
+  Future<int> _loadDailyUsage() async {
+    final session = _session;
+    if (session == null) return 0;
+    try {
+      final snapshot = await AppDatabase.instance()
+          .ref('dailyUsage/${session.groupId}/${session.userId}/$_todayDateKey')
+          .get();
+      if (snapshot.exists && snapshot.value is Map<Object?, Object?>) {
+        final data = snapshot.value! as Map<Object?, Object?>;
+        return (data['onlineSeconds'] as num?)?.toInt() ?? 0;
+      }
+    } catch (_) {}
+    return 0;
+  }
+
+  Future<void> _persistDailyUsage() async {
+    final session = _session;
+    if (session == null) return;
+    try {
+      await AppDatabase.instance()
+          .ref('dailyUsage/${session.groupId}/${session.userId}/$_todayDateKey')
+          .update({
+            'onlineSeconds': _todayOnlineSeconds,
+            'updatedAt': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+          });
+    } catch (_) {}
+  }
+
+  void _startUsageTracking() {
+    final session = _session;
+    if (session == null) return;
+    _usagePersistTimer?.cancel();
+    unawaited(_persistDailyUsage());
+    _usagePersistTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (_session == null) {
+        _usagePersistTimer?.cancel();
+        _usagePersistTimer = null;
+        return;
+      }
+      _todayOnlineSeconds += 30;
+      unawaited(_persistDailyUsage());
+      if (_todayOnlineSeconds >= PresenceConfig.dailyUsageCap.inSeconds) {
+        if (mounted) {
+          setState(() => _message = 'Daily usage limit reached.');
+        }
+        unawaited(_goAway());
+      }
     });
   }
 

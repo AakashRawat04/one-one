@@ -95,6 +95,17 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
   bool _peerWasLiveWithMe = false;
   Timer? _peerDisconnectGraceTimer;
 
+  // Inactivity timeout: if nobody speaks for the configured duration while
+  // the room is active, the session auto-closes to prevent runaway costs.
+  DateTime? _lastVoiceActivityAt;
+  Timer? _inactivityTimer;
+
+  // Daily usage tracker: prevents runaway sessions (e.g. phone left on in a
+  // crowd). Accumulates online seconds and caps at 120 min / user / day.
+  int _todayOnlineSeconds = 0;
+  String? _todayUsageDateKey;
+  Timer? _usagePersistTimer; // Flushes accumulated seconds to RTDB every 30 s.
+
   int _carouselIndex = 0;
 
   bool _loadingGroups = true;
@@ -161,6 +172,12 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
     _inviteLinkSubscription?.cancel();
     _heartbeatTimer?.cancel();
     _peerDisconnectGraceTimer?.cancel();
+    _inactivityTimer?.cancel();
+    _usagePersistTimer?.cancel();
+    // Persist final usage before disposal.
+    if (_todayOnlineSeconds > 0 && _selectedGroup != null) {
+      unawaited(_persistDailyUsage(_selectedGroup!.groupId));
+    }
     _clearFloatingReactions();
     final activeTalk = _talkSession;
     if (activeTalk != null) {
@@ -530,6 +547,108 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
       _showPresenceSnackbar(
         'The other participant has gone offline. You are now offline.',
       );
+    });
+  }
+
+  /// Marks the last time voice activity was detected (local or remote) and
+  /// reschedules the inactivity timeout check. Called from talk start/stop
+  /// and remote-speaker callbacks so the room stays open as long as anyone
+  /// is actually talking.
+  void _recordVoiceActivity() {
+    if (!_isOnline) return;
+    _lastVoiceActivityAt = DateTime.now();
+    _scheduleInactivityCheck();
+  }
+
+  /// Starts or resets a timer that auto-closes the room if nobody speaks for
+  /// [PresenceConfig.inactivityTimeout]. Prevents runaway sessions when a
+  /// phone is left unattended with an open mic.
+  void _scheduleInactivityCheck() {
+    _inactivityTimer?.cancel();
+    if (!_isOnline) return;
+    _inactivityTimer = Timer(PresenceConfig.inactivityTimeout, () {
+      if (!mounted || !_isOnline) return;
+      final lastActivity = _lastVoiceActivityAt;
+      if (lastActivity != null &&
+          DateTime.now().difference(lastActivity) <
+              PresenceConfig.inactivityTimeout) {
+        // Activity happened since we scheduled — reschedule instead.
+        _scheduleInactivityCheck();
+        return;
+      }
+      unawaited(_goAway());
+      _showPresenceSnackbar(
+        'Room closed due to inactivity. Send a nudge to go online again.',
+      );
+    });
+  }
+
+  /// Returns today's UTC date key (e.g. "2026-07-23") used to partition
+  /// daily usage records in RTDB.
+  String get _todayDateKey {
+    final now = DateTime.now().toUtc();
+    return '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+  }
+
+  /// Loads the accumulated online seconds for this user in the selected
+  /// group for today from RTDB. Called once when going online.
+  Future<int> _loadDailyUsage(String groupId) async {
+    try {
+      final snapshot = await AppDatabase.instance()
+          .ref('dailyUsage/$groupId/${_session.userId}/${_todayDateKey}')
+          .get();
+      if (snapshot.exists && snapshot.value is Map<Object?, Object?>) {
+        final data = snapshot.value! as Map<Object?, Object?>;
+        return (data['onlineSeconds'] as num?)?.toInt() ?? 0;
+      }
+    } catch (_) {
+      // Non-fatal — if we can't read usage, assume 0.
+    }
+    return 0;
+  }
+
+  /// Persists the accumulated online seconds to RTDB for today.
+  Future<void> _persistDailyUsage(String groupId) async {
+    try {
+      await AppDatabase.instance()
+          .ref('dailyUsage/$groupId/${_session.userId}/${_todayDateKey}')
+          .update({
+            'onlineSeconds': _todayOnlineSeconds,
+            'updatedAt': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+          });
+    } catch (_) {
+      // Best-effort — usage tracking is not critical for the session itself.
+    }
+  }
+
+  /// Starts a periodic timer that increments the daily usage counter and
+  /// persists it to RTDB every 30 seconds while the user is online.
+  void _startUsageTracking() {
+    _usagePersistTimer?.cancel();
+    // Persist immediately when going online.
+    final groupId = _selectedGroup?.groupId;
+    if (groupId != null) {
+      unawaited(_persistDailyUsage(groupId));
+    }
+    _usagePersistTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (!_isOnline) {
+        _usagePersistTimer?.cancel();
+        _usagePersistTimer = null;
+        return;
+      }
+      _todayOnlineSeconds += 30;
+      final groupId = _selectedGroup?.groupId;
+      if (groupId != null) {
+        unawaited(_persistDailyUsage(groupId));
+      }
+      // If cap is exceeded mid-session, force offline.
+      if (_todayOnlineSeconds >= PresenceConfig.dailyUsageCap.inSeconds) {
+        unawaited(_goAway());
+        _showPresenceSnackbar(
+          'Daily usage limit reached (${PresenceConfig.dailyUsageCap.inMinutes} min). '
+          'You can go online again tomorrow.',
+        );
+      }
     });
   }
 
@@ -925,12 +1044,23 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
       unawaited(_goAway());
       return;
     }
-    // Going online is no longer a solo action: it only happens once a sent
-    // nudge is accepted (see _processNudgeAction, which drives both the
-    // accepting recipient and the original sender into the room together).
-    // A bare manual tap with no accepted nudge in flight is rejected here.
+    // If someone else is already online in this group, let the user join
+    // directly — no nudge required since the room is already active.
+    if (_anyPeerOnline) {
+      unawaited(_goOnline());
+      return;
+    }
+    // Nobody is online yet — the room doesn't exist. Prompt the user to
+    // send a nudge so at least two people go online together.
     _showPresenceSnackbar(
-      'You can only go online after another user accepts your Nudge.',
+      'Send a nudge to go online together — or tap when someone else is already live.',
+    );
+  }
+
+  /// True when at least one other group member is actively online.
+  bool get _anyPeerOnline {
+    return _availability.entries.any(
+      (entry) => entry.key != _session.userId && entry.value.isLive,
     );
   }
 
@@ -950,6 +1080,27 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
       _state = 'connecting';
       _message = null;
     });
+
+    // Check daily usage cap before allowing the session to start.
+    final dateKey = _todayDateKey;
+    if (_todayUsageDateKey != dateKey) {
+      _todayUsageDateKey = dateKey;
+      _todayOnlineSeconds = 0;
+    }
+    final loadedSeconds = await _loadDailyUsage(group.groupId);
+    if (loadedSeconds > _todayOnlineSeconds) {
+      _todayOnlineSeconds = loadedSeconds;
+    }
+    if (_todayOnlineSeconds >= PresenceConfig.dailyUsageCap.inSeconds) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _state = 'away';
+        _message = 'Daily usage limit reached (${PresenceConfig.dailyUsageCap.inMinutes} min). '
+            'You can go online again tomorrow.';
+      });
+      return;
+    }
 
     OnlineSession? createdSession;
     try {
@@ -978,6 +1129,8 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
         _state = 'live';
         _message = LiveKitStatus.live;
       });
+      _scheduleInactivityCheck();
+      _startUsageTracking();
     } catch (error) {
       await _disconnectLiveKit();
       if (createdSession != null) {
@@ -1015,6 +1168,16 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
       _heartbeatTimer = null;
       _peerDisconnectGraceTimer?.cancel();
       _peerDisconnectGraceTimer = null;
+      _inactivityTimer?.cancel();
+      _inactivityTimer = null;
+      _lastVoiceActivityAt = null;
+      _usagePersistTimer?.cancel();
+      _usagePersistTimer = null;
+      // Persist final usage when going away.
+      final groupId = session.groupId;
+      if (_todayOnlineSeconds > 0) {
+        unawaited(_persistDailyUsage(groupId));
+      }
       _peerWasLiveWithMe = false;
       await _disconnectLiveKit();
       await _onlineRepository.goAway(session);
@@ -1086,6 +1249,7 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
         _state = 'talking';
         _message = LiveKitStatus.talking;
       });
+      _recordVoiceActivity();
     } catch (error) {
       if (startedTalk != null) {
         await _talkRepository.stopTalk(startedTalk, reason: 'mic_failed');
@@ -1113,6 +1277,8 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
       _state = 'live';
       _message = LiveKitStatus.live;
     });
+
+    _recordVoiceActivity();
 
     Object? stopError;
     try {
@@ -1491,6 +1657,10 @@ class _IdentityHomeScreenState extends State<IdentityHomeScreen>
         final newlySpeakingRemote = speaking
             .where((id) => id != _session.userId)
             .any((id) => !previousRemoteSpeakers.contains(id));
+        final hasRemoteSpeaker = speaking.any((id) => id != _session.userId);
+        if (hasRemoteSpeaker || speaking.contains(_session.userId)) {
+          _recordVoiceActivity();
+        }
         if (newlySpeakingRemote && _talkSession != null) {
           unawaited(_handleRemoteSpeakerStarted());
         } else if (speaking.any((id) => id != _session.userId)) {
@@ -2305,7 +2475,7 @@ class _StatusToggle extends StatelessWidget {
             ? 'Available after another member joins'
             : online
             ? 'Tap to go away'
-            : 'Send a nudge — going online together needs an accepted nudge',
+            : 'Go online when someone is already live, or send a nudge to go together',
         child: Material(
           color: const Color.fromRGBO(255, 255, 255, 0.12),
           borderRadius: BorderRadius.circular(18.r),
