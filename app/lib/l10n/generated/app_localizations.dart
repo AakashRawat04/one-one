@@ -458,6 +458,36 @@ abstract class AppLocalizations {
   /// **'View plans'**
   String get settingsViewPlans;
 
+  /// No description provided for @settingsTrialDaysLeft.
+  ///
+  /// In en, this message translates to:
+  /// **'{count} days left in free trial'**
+  String settingsTrialDaysLeft(int count);
+
+  /// No description provided for @settingsTrialOneDayLeft.
+  ///
+  /// In en, this message translates to:
+  /// **'1 day left in free trial'**
+  String get settingsTrialOneDayLeft;
+
+  /// No description provided for @settingsTrialLessThanADay.
+  ///
+  /// In en, this message translates to:
+  /// **'Less than a day left in your free trial'**
+  String get settingsTrialLessThanADay;
+
+  /// No description provided for @settingsFreePlanSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Free plan — live voice requires Duo Pro'**
+  String get settingsFreePlanSubtitle;
+
+  /// No description provided for @settingsDuoProActiveSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'You\'re on Duo Pro'**
+  String get settingsDuoProActiveSubtitle;
+
   /// No description provided for @settingsManageSubscription.
   ///
   /// In en, this message translates to:
@@ -974,6 +1004,12 @@ abstract class AppLocalizations {
   /// **'Share an invite'**
   String get noGroupsShareInvite;
 
+  /// No description provided for @noGroupsInviteClosedOnes.
+  ///
+  /// In en, this message translates to:
+  /// **'Invite Your Closed Ones'**
+  String get noGroupsInviteClosedOnes;
+
   /// No description provided for @noGroupsHavePin.
   ///
   /// In en, this message translates to:
@@ -991,6 +1027,72 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Join or create a group first'**
   String get noGroupsNeedGroupFirst;
+
+  /// No description provided for @inviteSheetTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Invite Your Closed Ones'**
+  String get inviteSheetTitle;
+
+  /// No description provided for @inviteSheetGroupNameLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Name your group'**
+  String get inviteSheetGroupNameLabel;
+
+  /// No description provided for @inviteSheetGroupNameHint.
+  ///
+  /// In en, this message translates to:
+  /// **'e.g. Family, Besties…'**
+  String get inviteSheetGroupNameHint;
+
+  /// No description provided for @inviteSheetContactsHeader.
+  ///
+  /// In en, this message translates to:
+  /// **'Select who to invite'**
+  String get inviteSheetContactsHeader;
+
+  /// No description provided for @inviteSheetSearchHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Search contacts'**
+  String get inviteSheetSearchHint;
+
+  /// No description provided for @inviteSheetNoContacts.
+  ///
+  /// In en, this message translates to:
+  /// **'No contacts found'**
+  String get inviteSheetNoContacts;
+
+  /// No description provided for @inviteSheetPermissionDenied.
+  ///
+  /// In en, this message translates to:
+  /// **'Allow contacts to see who to invite'**
+  String get inviteSheetPermissionDenied;
+
+  /// No description provided for @inviteSheetPermissionButton.
+  ///
+  /// In en, this message translates to:
+  /// **'Grant Contacts Access'**
+  String get inviteSheetPermissionButton;
+
+  /// No description provided for @inviteSheetSendButton.
+  ///
+  /// In en, this message translates to:
+  /// **'Create Group & Send Invite'**
+  String get inviteSheetSendButton;
+
+  /// No description provided for @inviteSheetCreating.
+  ///
+  /// In en, this message translates to:
+  /// **'Creating group…'**
+  String get inviteSheetCreating;
+
+  /// No description provided for @inviteSheetGroupNameRequired.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter a group name to continue'**
+  String get inviteSheetGroupNameRequired;
 
   /// No description provided for @createGroupTitle.
   ///
@@ -1100,6 +1202,24 @@ abstract class AppLocalizations {
   /// **'Could not open subscription management.'**
   String get subCustomerCenterFailed;
 
+  /// Hard paywall title after the free trial
+  ///
+  /// In en, this message translates to:
+  /// **'Your free trial has ended'**
+  String get trialExpiredTitle;
+
+  /// Hard paywall body after the free trial
+  ///
+  /// In en, this message translates to:
+  /// **'Keep talking with your friends by continuing with Duo Pro.'**
+  String get trialExpiredBody;
+
+  /// CTA that opens the Duo Pro paywall
+  ///
+  /// In en, this message translates to:
+  /// **'Get Pro'**
+  String get trialExpiredGetPro;
+
   /// No description provided for @crashTitle.
   ///
   /// In en, this message translates to:
@@ -1130,54 +1250,6 @@ abstract class AppLocalizations {
   /// **'Couldn\'t send the report. Check your connection and try again.'**
   String get crashSendFailed;
 
-  /// No description provided for @onboardingContinue.
-  ///
-  /// In en, this message translates to:
-  /// **'Continue'**
-  String get onboardingContinue;
-
-  /// No description provided for @onboardingGetStarted.
-  ///
-  /// In en, this message translates to:
-  /// **'Get started'**
-  String get onboardingGetStarted;
-
-  /// No description provided for @onboardingPage1Title.
-  ///
-  /// In en, this message translates to:
-  /// **'Talk instantly'**
-  String get onboardingPage1Title;
-
-  /// No description provided for @onboardingPage1Body.
-  ///
-  /// In en, this message translates to:
-  /// **'Hold to talk so your friends can hear you the moment you speak.'**
-  String get onboardingPage1Body;
-
-  /// No description provided for @onboardingPage2Title.
-  ///
-  /// In en, this message translates to:
-  /// **'Stay in the loop'**
-  String get onboardingPage2Title;
-
-  /// No description provided for @onboardingPage2Body.
-  ///
-  /// In en, this message translates to:
-  /// **'Know when your friends are talking to you, even if Duo is in the background.'**
-  String get onboardingPage2Body;
-
-  /// No description provided for @onboardingPage3Title.
-  ///
-  /// In en, this message translates to:
-  /// **'Never miss a nudge'**
-  String get onboardingPage3Title;
-
-  /// No description provided for @onboardingPage3Body.
-  ///
-  /// In en, this message translates to:
-  /// **'Allow background activity so nudges reach you when Duo isn\'t open.'**
-  String get onboardingPage3Body;
-
   /// No description provided for @startupSetupFailed.
   ///
   /// In en, this message translates to:
@@ -1207,6 +1279,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Someone is live — tap Join? to join'**
   String get homeSomeoneLive;
+
+  /// No description provided for @homeLiveVoiceLocked.
+  ///
+  /// In en, this message translates to:
+  /// **'Live voice requires Duo Pro — nudges and chat stay free'**
+  String get homeLiveVoiceLocked;
 
   /// No description provided for @homeInviteFriendVoice.
   ///

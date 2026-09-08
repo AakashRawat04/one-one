@@ -38,14 +38,33 @@ export function createGroupRoutes() {
   const router = Router();
 
   // HTTPS invite links are Android App Links when domain verification is
-  // configured. The redirect remains a fallback for devices that have not
-  // verified the domain yet but do have Duo installed.
+  // configured. For devices with the app installed, the OS intercepts this URL
+  // before the browser opens it. If the browser does open this URL:
+  //   • Android (no app): redirect to Play Store with the invite code as the
+  //     Play Install Referrer so the app auto-joins after install.
+  //   • iOS: redirect to the App Store listing.
+  //   • Desktop / other: fall back to the custom-scheme deep link.
   router.get("/invite/:inviteCode", (request, response) => {
     const inviteCode = joinInviteSchema.shape.inviteCode.parse(
       request.params.inviteCode
     );
     response.setHeader("Cache-Control", "no-store");
-    response.redirect(302, `oneone://invite/${encodeURIComponent(inviteCode)}`);
+
+    const ua = (request.headers["user-agent"] ?? "").toLowerCase();
+    const isAndroid = ua.includes("android");
+
+    if (isAndroid) {
+      // Pass the invite code as the Play Install Referrer so
+      // InstallReferrerReader.kt can recover it on first launch.
+      const referrer = encodeURIComponent(`inviteCode=${inviteCode}`);
+      response.redirect(
+        302,
+        `https://play.google.com/store/apps/details?id=app.oneone.one_one_app&referrer=${referrer}`
+      );
+    } else {
+      // Non-Android (or unknown UA) — fall back to the custom scheme.
+      response.redirect(302, `oneone://invite/${encodeURIComponent(inviteCode)}`);
+    }
   });
 
   router.get("/.well-known/assetlinks.json", (_request, response) => {

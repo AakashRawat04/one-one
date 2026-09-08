@@ -9,6 +9,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.RectF
 import android.os.Build
 import android.os.Bundle
@@ -255,7 +256,17 @@ object DuoWidgetRenderer {
 
         val pending = IncomingNudgeStore.pendingForGroup(context, group.groupId)
         val liveGroupId = ActiveVoiceSessionStore.readGroupId(context)
-        val isOnline = liveGroupId != null && liveGroupId == group.groupId
+        val selfLive = liveGroupId != null && liveGroupId == group.groupId
+        val selfUserId = DuoWidgetSnapshotStore.userId(context)
+        // Ignore the local user's own online flag — ActiveVoiceSessionStore is
+        // the immediate source of truth for self, and a stale snapshot must
+        // not keep LIVE after the session ends.
+        val friendsLive = group.members.any { member ->
+            member.online && (selfUserId.isNullOrBlank() || member.userId != selfUserId)
+        }
+        // Live when this device is in-session OR the snapshot says a friend is.
+        // Clearing either source must drop the LIVE chrome immediately.
+        val isOnline = selfLive || friendsLive
         val state = when {
             isOnline -> DuoWidgetState.ONLINE
             pending != null -> DuoWidgetState.PENDING
@@ -266,12 +277,20 @@ object DuoWidgetRenderer {
                 "R-12",
                 "id=$appWidgetId state=$state " +
                     "pendingEvent=${pending?.get("eventId")?.takeLast(6) ?: "none"} " +
-                    "liveGroup=${liveGroupId?.takeLast(6) ?: "none"}",
+                    "liveGroup=${liveGroupId?.takeLast(6) ?: "none"} " +
+                    "selfLive=$selfLive friendsLive=$friendsLive",
             )
         }
-        renderState(views, state, pending)
+        val feedback = DuoWidgetActionFeedback.currentFor(group.groupId)
+        renderState(views, state, pending, feedback)
         setActionIntents(
-            context, views, appWidgetId, group.groupId, group.name, pending?.get("responseUrl"),
+            context,
+            views,
+            appWidgetId,
+            group.groupId,
+            group.name,
+            pending?.get("responseUrl"),
+            voiceNudgeEnabled = state != DuoWidgetState.ONLINE,
         )
     }
 
@@ -395,16 +414,16 @@ object DuoWidgetRenderer {
     }
 
     /**
-     * Scale to a binder-safe size and flatten onto an opaque card-colored
-     * plate. Several OEM hosts (Motorola among them) drop RemoteViews
-     * bitmaps that have an alpha channel, which is why a successful
-     * Cloudinary download still showed a letter — [toCircular] produces
-     * transparent corners. Drawing onto #151515 matches
-     * [R.color.widget_glass_card_fill] so the circle still reads as a
-     * circle against the widget card.
+     * Scale to a binder-safe size, clip to a circle, and flatten onto an
+     * opaque card-colored plate. Several OEM hosts (Motorola among them)
+     * drop RemoteViews bitmaps that have an alpha channel — [toCircular]
+     * produces transparent corners — so every pixel must stay opaque.
+     * Drawing onto #151515 matches [R.color.widget_glass_card_fill].
      *
-     * The result is a new bitmap so the launcher recycling the parcel
-     * cannot poison [NotificationAvatarHelper]'s cache.
+     * The circular clip keeps adjacent avatars from reading as stacked
+     * squares when the row is laid out tightly. The result is a new bitmap
+     * so the launcher recycling the parcel cannot poison
+     * [NotificationAvatarHelper]'s cache.
      */
     private fun copyWidgetBitmap(source: Bitmap): Bitmap? {
         return try {
@@ -415,11 +434,25 @@ object DuoWidgetRenderer {
             out.eraseColor(0xFF151515.toInt())
             val canvas = Canvas(out)
             val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { isFilterBitmap = true }
-            canvas.drawBitmap(
-                source,
-                null,
-                RectF(0f, 0f, avatarPx.toFloat(), avatarPx.toFloat()),
-                paint,
+            val bounds = RectF(0f, 0f, avatarPx.toFloat(), avatarPx.toFloat())
+            val clip = Path().apply {
+                addCircle(avatarPx / 2f, avatarPx / 2f, avatarPx / 2f, Path.Direction.CW)
+            }
+            canvas.save()
+            canvas.clipPath(clip)
+            canvas.drawBitmap(source, null, bounds, paint)
+            canvas.restore()
+            // Hairline ring so neighbouring circles stay distinct.
+            val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                style = Paint.Style.STROKE
+                strokeWidth = avatarPx * 0.06f
+                color = 0xFF151515.toInt()
+            }
+            canvas.drawCircle(
+                avatarPx / 2f,
+                avatarPx / 2f,
+                avatarPx / 2f - stroke.strokeWidth / 2f,
+                stroke,
             )
             out
         } catch (error: Exception) {
@@ -539,6 +572,7 @@ object DuoWidgetRenderer {
         views: RemoteViews,
         state: DuoWidgetState,
         pending: Map<String, String>?,
+        feedback: DuoWidgetActionFeedback.Kind?,
     ) {
         when (state) {
             DuoWidgetState.ONLINE -> {
@@ -549,7 +583,8 @@ object DuoWidgetRenderer {
                 trySetVisibility(views, R.id.btn_accept, View.GONE)
                 trySetVisibility(views, R.id.btn_ring, View.GONE)
                 trySetVisibility(views, R.id.btn_notify, View.GONE)
-                trySetVisibility(views, R.id.btn_mic, View.VISIBLE)
+                // Already live — voice nudge is not offered from the widget.
+                trySetVisibility(views, R.id.btn_mic, View.GONE)
             }
             DuoWidgetState.PENDING -> {
                 val senderName = pending?.get("senderName") ?: "A friend"
@@ -563,9 +598,17 @@ object DuoWidgetRenderer {
                 trySetVisibility(views, R.id.btn_mic, View.VISIBLE)
             }
             DuoWidgetState.IDLE -> {
-                // The mic itself signals what tapping it does — no need to
-                // spell it out in a redundant pill underneath.
-                trySetVisibility(views, R.id.status_pill, View.GONE)
+                when (feedback) {
+                    DuoWidgetActionFeedback.Kind.RINGING -> {
+                        trySetText(views, R.id.status_pill, "Ringing…")
+                        trySetVisibility(views, R.id.status_pill, View.VISIBLE)
+                    }
+                    DuoWidgetActionFeedback.Kind.NOTIFIED -> {
+                        trySetText(views, R.id.status_pill, "Notified")
+                        trySetVisibility(views, R.id.status_pill, View.VISIBLE)
+                    }
+                    null -> trySetVisibility(views, R.id.status_pill, View.GONE)
+                }
                 trySetVisibility(views, R.id.live_label, View.GONE)
                 trySetVisibility(views, R.id.btn_decline, View.GONE)
                 trySetVisibility(views, R.id.btn_accept, View.GONE)
@@ -583,6 +626,7 @@ object DuoWidgetRenderer {
         groupId: String,
         groupName: String,
         responseUrl: String?,
+        voiceNudgeEnabled: Boolean,
     ) {
         trySetClick(
             views,
@@ -609,20 +653,22 @@ object DuoWidgetRenderer {
             R.id.btn_accept,
             broadcastIntent(context, appWidgetId, 5, DuoWidgetActionReceiver.actionAccept, groupId, responseUrl),
         )
-        val micIntent = Intent(context, QuickRecordActivity::class.java).apply {
-            putExtra(QuickRecordActivity.extraGroupId, groupId)
-            putExtra(QuickRecordActivity.extraGroupName, groupName)
-            // Overlay is singleInstance + empty affinity. CLEAR_TOP would
-            // also resume the existing app task on some OEMs.
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (voiceNudgeEnabled) {
+            val micIntent = Intent(context, QuickRecordActivity::class.java).apply {
+                putExtra(QuickRecordActivity.extraGroupId, groupId)
+                putExtra(QuickRecordActivity.extraGroupName, groupName)
+                // Overlay is singleInstance + empty affinity. CLEAR_TOP would
+                // also resume the existing app task on some OEMs.
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            val micPendingIntent = PendingIntent.getActivity(
+                context,
+                appWidgetId * 10 + 6,
+                micIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            trySetClick(views, R.id.btn_mic, micPendingIntent)
         }
-        val micPendingIntent = PendingIntent.getActivity(
-            context,
-            appWidgetId * 10 + 6,
-            micIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
-        trySetClick(views, R.id.btn_mic, micPendingIntent)
         // Do NOT also click-bind widget_root when children have actions —
         // some OEM hosts mishandle nested PendingIntents.
     }

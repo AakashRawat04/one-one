@@ -1,0 +1,87 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function hasGoogleIdentity() {
+      return isSignedIn()
+        && request.auth.token.firebase.identities.keys()
+          .hasAny(['google.com']);
+    }
+
+    function googleIdMatchesAuth() {
+      return request.resource.data.googleId is string
+        && (
+          (hasGoogleIdentity()
+            && request.resource.data.googleId
+              in request.auth.token.firebase.identities['google.com'])
+          || (!hasGoogleIdentity()
+            && request.resource.data.googleId == request.auth.uid)
+        );
+    }
+
+    // Account-scoped subscription / free-trial records for debugging and
+    // cross-device trial enforcement. Doc id is the Google account id when
+    // available (else Firebase Auth uid).
+    match /subscribers/{subscriberId} {
+      function ownsSubscriberDoc() {
+        return isSignedIn() && request.auth.uid == resource.data.userId;
+      }
+
+      function createsOwnSubscriberDoc() {
+        return isSignedIn()
+          && request.auth.uid == request.resource.data.userId
+          && request.resource.data.subscriberId == subscriberId
+          && request.resource.data.googleId == subscriberId
+          && googleIdMatchesAuth()
+          && request.resource.data.keys().hasAll([
+            'subscriberId',
+            'userId',
+            'googleId',
+            'trialStartedAtMs',
+            'trialEndsAtMs',
+            'createdAtMs',
+            'updatedAtMs',
+          ]);
+      }
+
+      // Trial start is immutable once written — prevents clearing app data
+      // / reinstall from resetting the 7-day clock via a client write.
+      function preservesTrialClock() {
+        return request.resource.data.subscriberId == resource.data.subscriberId
+          && request.resource.data.userId == resource.data.userId
+          && request.resource.data.googleId == resource.data.googleId
+          && request.resource.data.trialStartedAtMs
+            == resource.data.trialStartedAtMs
+          && request.resource.data.createdAtMs == resource.data.createdAtMs;
+      }
+
+      allow read: if ownsSubscriberDoc();
+      allow create: if createsOwnSubscriberDoc();
+      allow update: if ownsSubscriberDoc() && preservesTrialClock();
+      allow delete: if false;
+    }
+
+    // Secondary index: Firebase Auth uid → subscriber doc id (Google id).
+    match /subscriberByUserId/{userId} {
+      allow read: if isSignedIn() && request.auth.uid == userId;
+      allow create: if isSignedIn()
+        && request.auth.uid == userId
+        && request.resource.data.userId == userId
+        && request.resource.data.keys().hasAll([
+          'userId',
+          'subscriberId',
+          'googleId',
+          'updatedAtMs',
+        ]);
+      allow update: if isSignedIn()
+        && request.auth.uid == userId
+        && request.resource.data.userId == resource.data.userId
+        && request.resource.data.subscriberId == resource.data.subscriberId
+        && request.resource.data.googleId == resource.data.googleId;
+      allow delete: if false;
+    }
+  }
+}

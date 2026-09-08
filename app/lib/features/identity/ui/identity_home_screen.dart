@@ -158,6 +158,11 @@ abstract class _IdentityHomeBase extends State<IdentityHomeScreen>
   // Caps continuous call mode at PresenceConfig.callModeTimeout; cancelled
   // whenever the local user leaves call mode (manual toggle, go-away, etc.).
   Timer? _callModeTimeoutTimer;
+  bool _voicePaywallOpen = false;
+  /// Null until [FreeTrialAccess.snapshot] returns — Join? stays hidden
+  /// until we know live voice is allowed.
+  bool? _hasLiveVoiceAccess;
+  final Set<String> _liveLockedHandledNudgeIds = {};
   String _state = 'away';
   String? _message;
   ConnectionQuality _localConnectionQuality = ConnectionQuality.unknown;
@@ -220,6 +225,9 @@ abstract class _IdentityHomeBase extends State<IdentityHomeScreen>
   void _scheduleAvailabilityExpiryRefresh();
   Future<void> _goOnline({bool userIntent = false});
   Future<void> _switchVoiceGroup();
+  Future<bool> _presentVoicePaywall();
+  Future<void> _refreshLiveVoiceAccess();
+  Future<void> _maybeShowPostTrialPaywall();
   Future<void> _goAway({String reason = 'user_away'});
   Future<void> _toggleConnectionMode();
   Future<void> _connectLiveKit(OnlineSession session, {Room? preparedRoom});
@@ -356,6 +364,8 @@ class _IdentityHomeScreenState extends _IdentityHomeBase
         unawaited(_takePendingNudgeAction());
         unawaited(_takePendingInviteLink());
         unawaited(_clearOpenedChatPiles());
+        unawaited(_refreshLiveVoiceAccess());
+        unawaited(_maybeShowPostTrialPaywall());
       });
     } else {
       unawaited(_loadGroups());
@@ -593,6 +603,8 @@ class _IdentityHomeScreenState extends _IdentityHomeBase
       try {
         unawaited(_refreshDeviceRegistration());
         unawaited(_reportMediaVolume());
+        unawaited(_refreshLiveVoiceAccess());
+        unawaited(_maybeShowPostTrialPaywall());
         // Notification Accept/Connect taps are queued natively and consumed
         // here. Opening the app by itself must not start a LiveKit session —
         // `_goOnline` still requires `_explicitJoinIntent`.
@@ -671,7 +683,9 @@ class _IdentityHomeScreenState extends _IdentityHomeBase
     final groupAllOnline = live && allFriendsOnline;
     final groupMixed = !groupAllOffline && !groupAllOnline;
     final anyMemberOnline = live || anyFriendOnline;
-    final showGoLive = !_isOnline && anyFriendOnline;
+    final showGoLive =
+        !_isOnline && anyFriendOnline && _hasLiveVoiceAccess == true;
+    final liveVoiceLocked = !_isOnline && _hasLiveVoiceAccess == false;
     final liveAvailability = <String, MemberAvailability>{
       for (final friend in friends)
         friend.userId:
@@ -850,6 +864,8 @@ class _IdentityHomeScreenState extends _IdentityHomeBase
                                     ? context.l10n.homeConnectedToOtherGroup(
                                         activeGroup?.name ?? '',
                                       )
+                                    : liveVoiceLocked
+                                    ? context.l10n.homeLiveVoiceLocked
                                     : showGoLive
                                     ? context.l10n.homeSomeoneLive
                                     : !_serviceReady
@@ -913,6 +929,7 @@ class _IdentityHomeScreenState extends _IdentityHomeBase
                                 accent: accent,
                                 nudgeGroupId:
                                     (groupAllOffline ||
+                                        liveVoiceLocked ||
                                         (_isOnline && !viewingActiveGroup))
                                     ? focusedGroup?.groupId
                                     : null,
@@ -987,6 +1004,7 @@ class _IdentityHomeScreenState extends _IdentityHomeBase
               ),
               accent: accent,
               busy: _incomingPromptBusy,
+              liveVoiceLocked: _hasLiveVoiceAccess == false,
               onAccept: () =>
                   unawaited(_acceptIncomingNudge(_incomingPromptNudge!)),
               onDecline: () =>

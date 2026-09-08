@@ -15,7 +15,6 @@ class GoogleAuthScreen extends StatefulWidget {
 class _GoogleAuthScreenState extends State<GoogleAuthScreen> {
   IdentityRepository? _identityRepository;
   bool _isSigningIn = false;
-  bool? _onboardingSeen;
   String? _errorMessage;
 
   IdentityRepository get _repo => _identityRepository ??= IdentityRepository();
@@ -32,13 +31,6 @@ class _GoogleAuthScreenState extends State<GoogleAuthScreen> {
       );
     }
     unawaited(DuoLocalization.start());
-    unawaited(_loadOnboardingSeen());
-  }
-
-  Future<void> _loadOnboardingSeen() async {
-    final seen = await WelcomeOnboardingScreen.hasBeenSeen();
-    if (!mounted) return;
-    setState(() => _onboardingSeen = seen);
   }
 
   @override
@@ -101,19 +93,8 @@ class _GoogleAuthScreenState extends State<GoogleAuthScreen> {
     // Firebase still booting, or Google sign-in just started: underlay only.
     // Matches StartupGateScreen so cold starts never flash the welcome CTA at
     // already-signed-in users.
-    if (widget.initializing || _isSigningIn || _onboardingSeen == null) {
+    if (widget.initializing || _isSigningIn) {
       return const BrandSplashScreen();
-    }
-
-    if (!_onboardingSeen!) {
-      return WelcomeOnboardingHost(
-        child: WelcomeOnboardingScreen(
-          onFinished: () {
-            if (!mounted) return;
-            setState(() => _onboardingSeen = true);
-          },
-        ),
-      );
     }
 
     // The real welcome/sign-in CTA is about to be shown — the native splash
@@ -193,6 +174,10 @@ class _GoogleAuthScreenState extends State<GoogleAuthScreen> {
                     color: const Color.fromRGBO(56, 64, 71, 0.72),
                     fontSize: 11.sp,
                   ),
+                ),
+                DebugMarketPanel(
+                  compact: true,
+                  accent: const Color(0xff252a2e),
                 ),
               ],
             ),

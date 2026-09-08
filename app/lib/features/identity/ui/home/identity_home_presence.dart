@@ -321,6 +321,12 @@ mixin _IdentityHomePresence on _IdentityHomeBase {
     // If someone else is already online in this group, let the user join
     // directly — no nudge required since the room is already active.
     if (_anyPeerOnline) {
+      if (_hasLiveVoiceAccess != true) {
+        _showPresenceSnackbar(
+          'Live voice requires Duo Pro. Nudges and chat stay free.',
+        );
+        return;
+      }
       unawaited(
         AnalyticsService.logButtonClick(
           buttonName: 'go_live',
@@ -333,7 +339,7 @@ mixin _IdentityHomePresence on _IdentityHomeBase {
           screenName: 'home',
         ),
       );
-      unawaited(_goOnline(userIntent: true));
+      unawaited(_goOnlineOrShowPaywall());
       return;
     }
     // Nobody is online yet — the room doesn't exist. Prompt the user to
@@ -341,6 +347,54 @@ mixin _IdentityHomePresence on _IdentityHomeBase {
     _showPresenceSnackbar(
       'Send a nudge to go online together — or tap when someone else is already live.',
     );
+  }
+
+  /// Wraps a manual [_goOnline] call: swallows [VoicePaywallRequiredException]
+  /// (message already set by [_goOnline]) and surfaces the Duo Pro paywall.
+  Future<void> _goOnlineOrShowPaywall({bool userIntent = true}) async {
+    try {
+      await _goOnline(userIntent: userIntent);
+    } on VoicePaywallRequiredException {
+      await _presentVoicePaywall();
+    }
+  }
+
+  /// Opens the illustrated gate paywall (nudges/chat remain free).
+  /// Single-flight — concurrent callers share one route.
+  @override
+  Future<bool> _presentVoicePaywall() async {
+    if (!mounted || _voicePaywallOpen) return false;
+    _voicePaywallOpen = true;
+    try {
+      final purchased = await DuoGatePaywallScreen.open(
+        context,
+        mode: DuoGatePaywallMode.voiceBlocked,
+      );
+      await FreeTrialAccess.markPostTrialPaywallShown(_session.userId);
+      await _refreshLiveVoiceAccess();
+      return purchased;
+    } finally {
+      if (mounted) _voicePaywallOpen = false;
+    }
+  }
+
+  @override
+  Future<void> _refreshLiveVoiceAccess() async {
+    final snapshot = await FreeTrialAccess.snapshot(userId: _session.userId);
+    if (!mounted) return;
+    if (_hasLiveVoiceAccess == snapshot.canUseLiveVoice) return;
+    setState(() => _hasLiveVoiceAccess = snapshot.canUseLiveVoice);
+  }
+
+  /// One-time illustrated paywall when the user returns after trial expiry.
+  @override
+  Future<void> _maybeShowPostTrialPaywall() async {
+    if (!mounted || _voicePaywallOpen || _isOnline) return;
+    if (!await FreeTrialAccess.shouldShowPostTrialPaywall(_session.userId)) {
+      return;
+    }
+    if (!mounted) return;
+    await _presentVoicePaywall();
   }
 
   /// True when at least one other group member is actively online.
@@ -362,6 +416,15 @@ mixin _IdentityHomePresence on _IdentityHomeBase {
         groupId: _selectedGroup?.groupId,
       );
       return;
+    }
+
+    // 1b. Nudges and chat stay free forever — only live voice needs Duo Pro.
+    // Checked here so every entry point (manual toggle, nudge accept, sender
+    // auto-connect, group switch) is gated in exactly one place.
+    final access = await FreeTrialAccess.resolve(userId: _session.userId);
+    if (access == FreeTrialAccessResult.requirePro) {
+      _explicitJoinIntent = false;
+      throw const VoicePaywallRequiredException();
     }
     // Must be sync (not just `_busy` from a later setState) — accept FCM and
     // native pending-connect can both enter here within the same event loop
@@ -550,7 +613,12 @@ mixin _IdentityHomePresence on _IdentityHomeBase {
         .firstOrNull;
     await _goAway();
     if (!mounted || _onlineSession != null) return;
-    await _goOnline(userIntent: true);
+    try {
+      await _goOnline(userIntent: true);
+    } on VoicePaywallRequiredException {
+      await _presentVoicePaywall();
+      return;
+    }
     if (!mounted || _onlineSession?.groupId != nextGroup.groupId) return;
     _showPresenceSnackbar(
       'You joined ${nextGroup.name}. '

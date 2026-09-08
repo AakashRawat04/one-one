@@ -4,7 +4,6 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent">
 
-    <!-- Soft radial glow behind the sheet, near the top edge of the container -->
     <View
         android:layout_width="match_parent"
         android:layout_height="260dp"
@@ -27,27 +26,45 @@
         <View
             android:layout_width="36dp"
             android:layout_height="4dp"
-            android:layout_marginBottom="20dp"
+            android:layout_marginBottom="18dp"
             android:background="@drawable/bg_quick_record_bar" />
 
         <ImageView
             android:id="@+id/logo_bars"
-            android:layout_width="20dp"
-            android:layout_height="20dp"
-            android:layout_marginBottom="14dp"
-            android:src="@drawable/ic_duo_bars" />
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:layout_marginBottom="12dp"
+            android:contentDescription="Duo"
+            android:scaleType="fitCenter"
+            android:src="@drawable/ic_widget_logo" />
 
         <TextView
             android:id="@+id/target_text"
-            android:layout_width="wrap_content"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginBottom="20dp"
+            android:layout_marginBottom="6dp"
             android:gravity="center"
-            android:text="Sending a voice note"
-            android:textColor="@color/widget_text_secondary"
-            android:textSize="13sp"
+            android:text="Friends"
+            android:textColor="@color/widget_text_primary"
+            android:textSize="18sp"
+            android:textStyle="bold"
             android:maxLines="2"
             android:ellipsize="end" />
+
+        <TextView
+            android:id="@+id/recording_badge"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="18dp"
+            android:background="@drawable/bg_widget_pill_round"
+            android:paddingLeft="12dp"
+            android:paddingTop="5dp"
+            android:paddingRight="12dp"
+            android:paddingBottom="5dp"
+            android:text="Recording…"
+            android:textColor="@color/widget_online_green"
+            android:textSize="12sp"
+            android:textStyle="bold" />
 
         <FrameLayout
             android:layout_width="match_parent"
@@ -73,12 +90,13 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginBottom="28dp"
-            android:text="Listening…"
-            android:textColor="@color/widget_text_primary"
-            android:textSize="16sp"
-            android:textStyle="bold" />
+            android:gravity="center"
+            android:text="Your voice is being recorded"
+            android:textColor="@color/widget_text_secondary"
+            android:textSize="14sp" />
 
         <LinearLayout
+            android:id="@+id/controls_row"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"

@@ -71,15 +71,15 @@ const Map<_SetupStep, _StepVisual> _stepVisuals = {
     boxBottomColor: Color(0xff5F2879),
   ),
   _SetupStep.background: _StepVisual(
-    iconColor: Color(0xffdb8a1e),
+    iconColor: Color(0xffE9A51C),
     icon: Icons.battery_saver_rounded,
     backgroundAsset: 'assets/Onboarding2.png',
     imageWidth: 816,
     imageHeight: 1287,
-    // Screen 3 — mustard yellow (rgb 209,139,9). Scale below 1 so the
-    // illustration sits with a matching yellow border around it.
-    boxTopColor: Color(0xffD18B09),
-    boxBottomColor: Color(0xffD18B09),
+    // Screen 3 — unified illustration yellow (rgb 233,165,28). Scale below 1
+    // so the artwork sits with a matching yellow border around it.
+    boxTopColor: Color(0xffE9A51C),
+    boxBottomColor: Color(0xffE9A51C),
     containScale: 0.78,
   ),
 };

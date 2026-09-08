@@ -91,6 +91,8 @@ mixin _IdentityHomeGroups on _IdentityHomeBase {
         unawaited(_takePendingNudgeAction());
         unawaited(_takePendingInviteLink());
         unawaited(_clearOpenedChatPiles());
+        unawaited(_refreshLiveVoiceAccess());
+        unawaited(_maybeShowPostTrialPaywall());
         final pendingGroupIds = _pendingUserGroupIds;
         _pendingUserGroupIds = null;
         if (pendingGroupIds != null) {

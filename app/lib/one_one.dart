@@ -48,6 +48,7 @@ export 'package:livekit_client/livekit_client.dart'
     hide ConnectionState, Priority, TimeoutException, EncryptionType;
 export 'package:livekit_noise_filter/livekit_noise_filter.dart';
 export 'package:lottie/lottie.dart';
+export 'package:flutter_contacts/flutter_contacts.dart';
 export 'package:lucide_flutter/lucide_flutter.dart';
 export 'package:package_info_plus/package_info_plus.dart';
 export 'package:path_provider/path_provider.dart';
@@ -72,7 +73,6 @@ export 'app/profile_picture_screen.dart';
 export 'app/setup_permission_screen.dart';
 export 'app/startup_gate_screen.dart';
 export 'app/startup_performance.dart';
-export 'app/welcome_onboarding_screen.dart';
 
 // Core — firebase
 export 'core/firebase/analytics_events.dart';
@@ -138,6 +138,7 @@ export 'features/groups/models/group_member_summary.dart';
 export 'features/groups/models/group_summary.dart';
 export 'features/groups/ui/group_home_screen.dart';
 export 'features/groups/ui/group_management_screen.dart';
+export 'features/groups/ui/invite_contacts_sheet.dart';
 export 'features/groups/ui/waiting_for_group_members_screen.dart';
 
 // Features — identity
@@ -210,9 +211,15 @@ export 'features/online/voice_pip_bridge.dart';
 export 'features/service_status/service_status_gate.dart';
 
 // Features — subscriptions
+export 'features/subscriptions/duo_gate_paywall_screen.dart';
 export 'features/subscriptions/eleven_pro_paywall_screen.dart';
+export 'features/subscriptions/free_trial_access.dart';
+export 'features/subscriptions/free_trial_config.dart';
 export 'features/subscriptions/revenue_cat_service.dart';
+export 'features/subscriptions/subscriber_access_record.dart';
+export 'features/subscriptions/subscriber_access_store.dart';
 export 'features/subscriptions/subscription_management_sheet.dart';
+export 'features/subscriptions/trial_expired_gate_screen.dart';
 
 // Features — talk
 export 'features/talk/data/talk_repository.dart';

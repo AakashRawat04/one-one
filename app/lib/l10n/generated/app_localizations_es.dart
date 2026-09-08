@@ -203,6 +203,24 @@ class AppLocalizationsEs extends AppLocalizations {
   String get settingsViewPlans => 'Ver planes';
 
   @override
+  String settingsTrialDaysLeft(int count) {
+    return '$count días restantes de la prueba gratis';
+  }
+
+  @override
+  String get settingsTrialOneDayLeft => '1 día restante de la prueba gratis';
+
+  @override
+  String get settingsTrialLessThanADay => 'Menos de un día de prueba gratis';
+
+  @override
+  String get settingsFreePlanSubtitle =>
+      'Plan gratis — la voz en vivo requiere Duo Pro';
+
+  @override
+  String get settingsDuoProActiveSubtitle => 'Tienes Duo Pro';
+
+  @override
   String get settingsManageSubscription => 'Gestionar suscripción';
 
   @override
@@ -484,6 +502,9 @@ class AppLocalizationsEs extends AppLocalizations {
   String get noGroupsShareInvite => 'Compartir una invitación';
 
   @override
+  String get noGroupsInviteClosedOnes => 'Invita a tus seres queridos';
+
+  @override
   String get noGroupsHavePin => '¿Ya tienes un grupo? Usa el PIN de un amigo.';
 
   @override
@@ -491,6 +512,41 @@ class AppLocalizationsEs extends AppLocalizations {
 
   @override
   String get noGroupsNeedGroupFirst => 'Únete o crea un grupo primero';
+
+  @override
+  String get inviteSheetTitle => 'Invita a tus seres queridos';
+
+  @override
+  String get inviteSheetGroupNameLabel => 'Nombra tu grupo';
+
+  @override
+  String get inviteSheetGroupNameHint => 'p. ej. Familia, Amigos…';
+
+  @override
+  String get inviteSheetContactsHeader => 'Selecciona a quién invitar';
+
+  @override
+  String get inviteSheetSearchHint => 'Buscar contactos';
+
+  @override
+  String get inviteSheetNoContacts => 'No se encontraron contactos';
+
+  @override
+  String get inviteSheetPermissionDenied =>
+      'Permite el acceso a contactos para ver a quién invitar';
+
+  @override
+  String get inviteSheetPermissionButton => 'Permitir acceso a contactos';
+
+  @override
+  String get inviteSheetSendButton => 'Crear grupo y enviar invitación';
+
+  @override
+  String get inviteSheetCreating => 'Creando grupo…';
+
+  @override
+  String get inviteSheetGroupNameRequired =>
+      'Ingresa un nombre de grupo para continuar';
 
   @override
   String get createGroupTitle => 'crear grupo';
@@ -551,6 +607,16 @@ class AppLocalizationsEs extends AppLocalizations {
       'No se pudo abrir la gestión de suscripción.';
 
   @override
+  String get trialExpiredTitle => 'Tu prueba gratuita ha terminado';
+
+  @override
+  String get trialExpiredBody =>
+      'Sigue hablando con tus amigos continuando con Duo Pro.';
+
+  @override
+  String get trialExpiredGetPro => 'Obtener Pro';
+
+  @override
   String get crashTitle => 'La app se encontró con un problema';
 
   @override
@@ -566,33 +632,6 @@ class AppLocalizationsEs extends AppLocalizations {
   @override
   String get crashSendFailed =>
       'No se pudo enviar el informe. Comprueba tu conexión e inténtalo de nuevo.';
-
-  @override
-  String get onboardingContinue => 'Continuar';
-
-  @override
-  String get onboardingGetStarted => 'Empezar';
-
-  @override
-  String get onboardingPage1Title => 'Habla al instante';
-
-  @override
-  String get onboardingPage1Body =>
-      'Mantén pulsado para hablar y que tus amigos te oigan en cuanto hables.';
-
-  @override
-  String get onboardingPage2Title => 'No te pierdas nada';
-
-  @override
-  String get onboardingPage2Body =>
-      'Entérate cuando tus amigos te hablen, aunque Duo esté en segundo plano.';
-
-  @override
-  String get onboardingPage3Title => 'No te pierdas ningún nudge';
-
-  @override
-  String get onboardingPage3Body =>
-      'Permite la actividad en segundo plano para recibir nudges cuando Duo no esté abierto.';
 
   @override
   String get startupSetupFailed =>
@@ -611,6 +650,10 @@ class AppLocalizationsEs extends AppLocalizations {
 
   @override
   String get homeSomeoneLive => 'Alguien está en directo — toca ¿Unirse?';
+
+  @override
+  String get homeLiveVoiceLocked =>
+      'La voz en vivo requiere Duo Pro — los nudges y el chat siguen siendo gratis';
 
   @override
   String get homeInviteFriendVoice => 'invita a un amigo para activar la voz';

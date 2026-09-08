@@ -119,12 +119,40 @@ mixin _IdentityHomeNudges on _IdentityHomeBase {
     await _onGroupCarouselChanged(index);
     if (!mounted) return;
     _explicitJoinIntent = true;
-    if (!_isViewingActiveGroup) {
-      if (_isOnline) {
-        await _switchVoiceGroup();
-      } else {
-        await _goOnline(userIntent: true);
+    try {
+      if (!_isViewingActiveGroup) {
+        if (_isOnline) {
+          await _switchVoiceGroup();
+        } else {
+          await _goOnline(userIntent: true);
+        }
       }
+    } on VoicePaywallRequiredException {
+      // Trial ended — nudges/chat stay free, but live voice needs Duo Pro.
+      // Give sender and receiver different copy for the same event.
+      _processedNudgeEventIds.remove(action.eventId);
+      _explicitJoinIntent = false;
+      if (!mounted) return;
+      final isSenderAutoConnect = action.action == 'connect';
+      _liveLockedHandledNudgeIds.add(action.eventId);
+      unawaited(_nudgeActionBridge.dismissIncomingNudge(action.eventId));
+      if (mounted) {
+        setState(() {
+          _incomingPromptNudge = null;
+          _incomingPromptBusy = false;
+        });
+      }
+      if (isSenderAutoConnect) {
+        _showPresenceSnackbar(
+          'They accepted, but live voice requires Duo Pro.',
+        );
+      }
+      final purchased = await _presentVoicePaywall();
+      if (purchased && mounted) {
+        _liveLockedHandledNudgeIds.remove(action.eventId);
+        await _processNudgeAction(action);
+      }
+      return;
     }
     if (!mounted) return;
     if (!_isOnline) {
@@ -398,7 +426,9 @@ mixin _IdentityHomeNudges on _IdentityHomeBase {
           preferNudgeId: preferNudgeId,
         )
         .where(
-          (nudge) => _groups.any((group) => group.groupId == nudge.groupId),
+          (nudge) =>
+              !_liveLockedHandledNudgeIds.contains(nudge.nudgeId) &&
+              _groups.any((group) => group.groupId == nudge.groupId),
         )
         .toList();
     if (queue.isEmpty) {

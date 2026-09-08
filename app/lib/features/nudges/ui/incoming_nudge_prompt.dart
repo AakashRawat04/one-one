@@ -31,6 +31,7 @@ class IncomingNudgeDialogue extends StatelessWidget {
     required this.onAccept,
     required this.onDecline,
     this.busy = false,
+    this.liveVoiceLocked = false,
   });
 
   final IncomingNudgePromptItem item;
@@ -38,6 +39,7 @@ class IncomingNudgeDialogue extends StatelessWidget {
   final VoidCallback onAccept;
   final VoidCallback onDecline;
   final bool busy;
+  final bool liveVoiceLocked;
 
   @override
   Widget build(BuildContext context) {
@@ -89,7 +91,9 @@ class IncomingNudgeDialogue extends StatelessWidget {
                       ),
                       SizedBox(height: 6.h),
                       Text(
-                        'Join this group live?',
+                        liveVoiceLocked
+                            ? 'Live voice requires Duo Pro'
+                            : 'Join this group live?',
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           color: Colors.white54,

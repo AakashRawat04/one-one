@@ -92,21 +92,39 @@
             android:src="@drawable/ic_widget_decline_png"
             android:visibility="gone" />
 
-        <ImageView
+        <LinearLayout
             android:id="@+id/btn_ring"
-            android:layout_width="36dp"
-            android:layout_height="36dp"
-            android:layout_marginStart="4dp"
-            android:background="@drawable/bg_widget_btn_accent_oval"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="2dp"
+            android:background="@drawable/bg_widget_btn_accent_pill"
             android:clickable="true"
             android:contentDescription="Ring"
             android:focusable="true"
-            android:paddingLeft="9dp"
-            android:paddingTop="9dp"
-            android:paddingRight="9dp"
-            android:paddingBottom="9dp"
-            android:scaleType="fitCenter"
-            android:src="@drawable/ic_widget_ring_png" />
+            android:gravity="center"
+            android:minWidth="52dp"
+            android:orientation="vertical"
+            android:paddingLeft="8dp"
+            android:paddingTop="6dp"
+            android:paddingRight="8dp"
+            android:paddingBottom="6dp">
+
+            <ImageView
+                android:layout_width="18dp"
+                android:layout_height="18dp"
+                android:contentDescription="@null"
+                android:scaleType="fitCenter"
+                android:src="@drawable/ic_widget_ring_png" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="Ring"
+                android:textColor="@color/widget_text_primary"
+                android:textSize="10sp"
+                android:textStyle="bold" />
+        </LinearLayout>
 
         <TextView
             android:layout_width="0dp"
@@ -135,21 +153,39 @@
             android:layout_weight="1"
             android:visibility="invisible" />
 
-        <ImageView
+        <LinearLayout
             android:id="@+id/btn_notify"
-            android:layout_width="36dp"
-            android:layout_height="36dp"
-            android:layout_marginEnd="4dp"
-            android:background="@drawable/bg_widget_btn_accent_oval"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="2dp"
+            android:background="@drawable/bg_widget_btn_accent_pill"
             android:clickable="true"
             android:contentDescription="Notify"
             android:focusable="true"
-            android:paddingLeft="9dp"
-            android:paddingTop="9dp"
-            android:paddingRight="9dp"
-            android:paddingBottom="9dp"
-            android:scaleType="fitCenter"
-            android:src="@drawable/ic_widget_notify_png" />
+            android:gravity="center"
+            android:minWidth="52dp"
+            android:orientation="vertical"
+            android:paddingLeft="8dp"
+            android:paddingTop="6dp"
+            android:paddingRight="8dp"
+            android:paddingBottom="6dp">
+
+            <ImageView
+                android:layout_width="18dp"
+                android:layout_height="18dp"
+                android:contentDescription="@null"
+                android:scaleType="fitCenter"
+                android:src="@drawable/ic_widget_notify_png" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="Notify"
+                android:textColor="@color/widget_text_primary"
+                android:textSize="10sp"
+                android:textStyle="bold" />
+        </LinearLayout>
 
         <ImageView
             android:id="@+id/btn_accept"
@@ -177,6 +213,7 @@
         android:gravity="center_vertical"
         android:orientation="vertical">
 
+        <!-- Positive gaps (not negative overlap) so circular avatars stay distinct. -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -211,7 +248,7 @@
             <FrameLayout
                 android:layout_width="36dp"
                 android:layout_height="36dp"
-                android:layout_marginStart="-8dp">
+                android:layout_marginStart="6dp">
 
                 <TextView
                     android:id="@+id/avatar_2_mono"
@@ -236,7 +273,7 @@
             <FrameLayout
                 android:layout_width="36dp"
                 android:layout_height="36dp"
-                android:layout_marginStart="-8dp">
+                android:layout_marginStart="6dp">
 
                 <TextView
                     android:id="@+id/avatar_3_mono"
@@ -261,7 +298,7 @@
             <FrameLayout
                 android:layout_width="36dp"
                 android:layout_height="36dp"
-                android:layout_marginStart="-8dp">
+                android:layout_marginStart="6dp">
 
                 <TextView
                     android:id="@+id/avatar_4_mono"
@@ -286,7 +323,7 @@
             <FrameLayout
                 android:layout_width="36dp"
                 android:layout_height="36dp"
-                android:layout_marginStart="-8dp">
+                android:layout_marginStart="6dp">
 
                 <TextView
                     android:id="@+id/avatar_5_mono"
@@ -312,7 +349,7 @@
                 android:id="@+id/avatar_overflow"
                 android:layout_width="36dp"
                 android:layout_height="36dp"
-                android:layout_marginStart="-8dp"
+                android:layout_marginStart="6dp"
                 android:background="@drawable/bg_widget_btn_oval"
                 android:gravity="center"
                 android:text="+2"

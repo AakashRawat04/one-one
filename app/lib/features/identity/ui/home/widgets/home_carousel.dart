@@ -183,10 +183,10 @@ class _ExperienceCarouselState extends State<_ExperienceCarousel>
           focused &&
           !widget.connecting &&
           !connectedToThisGroup &&
-          // Direct join only when offline. While live elsewhere, the main
-          // button is nudge-only (no auto-switch into this group).
-          widget.connectedGroupId == null &&
-          widget.nudgeGroupId == null,
+          // Direct join only when this card is in Join? / go-live mode.
+          // Locked / unknown access never sets goLiveGroupId, so Join?
+          // cannot appear or be tapped.
+          goLiveMode,
       talkActive: widget.talkActive && actuallySelected,
       talkBusy: widget.talkBusy,
       accent: widget.accent,

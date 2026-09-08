@@ -44,6 +44,8 @@ object ActiveVoiceSessionStore {
             "ActiveVoiceSessionStore.save sessionSuffix=${serviceSessionId.takeLast(6)} " +
                 "groupId=$groupId userId=$userId",
         )
+        // Widget Live chrome must flip the moment the native session starts.
+        DuoWidgetRenderer.scheduleUpdateAll(context)
     }
 
     fun clear(context: Context) {
@@ -56,6 +58,9 @@ object ActiveVoiceSessionStore {
             "PresenceRing",
             "ActiveVoiceSessionStore.clear previousSessionSuffix=${previous?.takeLast(6) ?: "none"}",
         )
+        // Dropping the session must clear Live on the widget immediately —
+        // waiting for the next Flutter snapshot leaves a stale LIVE pill.
+        DuoWidgetRenderer.scheduleUpdateAll(context)
     }
 
     /** Returns the serviceSessionId currently stored, or null if none. Used by

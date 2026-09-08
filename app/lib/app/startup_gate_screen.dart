@@ -80,6 +80,10 @@ class _StartupGateScreenState extends State<StartupGateScreen>
       // Always pre-fetch groups in parallel regardless of setup state.
       final groupsPrefetch = _groupRepository.loadGroupsForUser(session.userId);
 
+      // Start the free-trial clock as soon as identity is ready so the
+      // 7-day window covers onboarding as well as home use.
+      await FreeTrialAccess.ensureStarted(session.userId);
+
       if (isReturningUser) {
         // On every launch, verify critical permissions are still granted.
         // Users can revoke them between sessions via system settings.
@@ -93,7 +97,7 @@ class _StartupGateScreenState extends State<StartupGateScreen>
           return;
         }
         await _markSetupComplete(session.userId);
-        await _presentHomeScreen(
+        await _presentHomeOrTrialGate(
           session,
           groupsPrefetch: groupsPrefetch,
           stopwatch: stopwatch,
@@ -122,7 +126,7 @@ class _StartupGateScreenState extends State<StartupGateScreen>
                         await _identityRepository.markSetupComplete();
                         await _markSetupComplete(readySession.userId);
                         if (!mounted) return;
-                        await _presentHomeScreen(readySession);
+                        await _presentHomeOrTrialGate(readySession);
                       },
                     );
                   });
@@ -163,7 +167,29 @@ class _StartupGateScreenState extends State<StartupGateScreen>
     final readySession = await _identityRepository.ensureIdentity();
     _readySession = readySession;
     if (!mounted) return;
-    await _presentHomeScreen(readySession);
+    await _presentHomeOrTrialGate(readySession);
+  }
+
+  /// Home, nudges and chat are free forever — the free trial only gates
+  /// live voice, which is checked inline at the moment of connecting
+  /// (`_goOnline` in `identity_home_presence.dart`) so it can show
+  /// tailored receiver/sender copy plus the Duo Pro paywall right there.
+  ///
+  /// This method no longer blocks entry to home after the trial ends; it
+  /// is kept (rather than inlined) so call sites and naming stay stable if
+  /// a future startup-level check is reintroduced.
+  Future<void> _presentHomeOrTrialGate(
+    IdentitySession session, {
+    Future<List<GroupSummary>>? groupsPrefetch,
+    Stopwatch? stopwatch,
+    String? preferredGroupId,
+  }) async {
+    await _presentHomeScreen(
+      session,
+      groupsPrefetch: groupsPrefetch,
+      stopwatch: stopwatch,
+      preferredGroupId: preferredGroupId,
+    );
   }
 
   /// Keeps the splash visible while home data is prefetched in parallel with
@@ -254,7 +280,7 @@ class _StartupGateScreenState extends State<StartupGateScreen>
     if (groupId != null) {
       Navigator.of(context).popUntil((route) => route.isFirst);
       if (!mounted) return;
-      await _presentHomeScreen(
+      await _presentHomeOrTrialGate(
         session,
         groupsPrefetch: _groupRepository.loadGroupsForUser(session.userId),
         preferredGroupId: groupId,

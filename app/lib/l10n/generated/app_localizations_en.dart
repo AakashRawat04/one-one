@@ -201,6 +201,25 @@ class AppLocalizationsEn extends AppLocalizations {
   String get settingsViewPlans => 'View plans';
 
   @override
+  String settingsTrialDaysLeft(int count) {
+    return '$count days left in free trial';
+  }
+
+  @override
+  String get settingsTrialOneDayLeft => '1 day left in free trial';
+
+  @override
+  String get settingsTrialLessThanADay =>
+      'Less than a day left in your free trial';
+
+  @override
+  String get settingsFreePlanSubtitle =>
+      'Free plan — live voice requires Duo Pro';
+
+  @override
+  String get settingsDuoProActiveSubtitle => 'You\'re on Duo Pro';
+
+  @override
   String get settingsManageSubscription => 'Manage Subscription';
 
   @override
@@ -477,6 +496,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get noGroupsShareInvite => 'Share an invite';
 
   @override
+  String get noGroupsInviteClosedOnes => 'Invite Your Closed Ones';
+
+  @override
   String get noGroupsHavePin =>
       'Have a group already? Use the PIN from a friend.';
 
@@ -485,6 +507,40 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get noGroupsNeedGroupFirst => 'Join or create a group first';
+
+  @override
+  String get inviteSheetTitle => 'Invite Your Closed Ones';
+
+  @override
+  String get inviteSheetGroupNameLabel => 'Name your group';
+
+  @override
+  String get inviteSheetGroupNameHint => 'e.g. Family, Besties…';
+
+  @override
+  String get inviteSheetContactsHeader => 'Select who to invite';
+
+  @override
+  String get inviteSheetSearchHint => 'Search contacts';
+
+  @override
+  String get inviteSheetNoContacts => 'No contacts found';
+
+  @override
+  String get inviteSheetPermissionDenied =>
+      'Allow contacts to see who to invite';
+
+  @override
+  String get inviteSheetPermissionButton => 'Grant Contacts Access';
+
+  @override
+  String get inviteSheetSendButton => 'Create Group & Send Invite';
+
+  @override
+  String get inviteSheetCreating => 'Creating group…';
+
+  @override
+  String get inviteSheetGroupNameRequired => 'Enter a group name to continue';
 
   @override
   String get createGroupTitle => 'create group';
@@ -544,6 +600,16 @@ class AppLocalizationsEn extends AppLocalizations {
       'Could not open subscription management.';
 
   @override
+  String get trialExpiredTitle => 'Your free trial has ended';
+
+  @override
+  String get trialExpiredBody =>
+      'Keep talking with your friends by continuing with Duo Pro.';
+
+  @override
+  String get trialExpiredGetPro => 'Get Pro';
+
+  @override
   String get crashTitle => 'The app ran into a problem';
 
   @override
@@ -559,33 +625,6 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get crashSendFailed =>
       'Couldn\'t send the report. Check your connection and try again.';
-
-  @override
-  String get onboardingContinue => 'Continue';
-
-  @override
-  String get onboardingGetStarted => 'Get started';
-
-  @override
-  String get onboardingPage1Title => 'Talk instantly';
-
-  @override
-  String get onboardingPage1Body =>
-      'Hold to talk so your friends can hear you the moment you speak.';
-
-  @override
-  String get onboardingPage2Title => 'Stay in the loop';
-
-  @override
-  String get onboardingPage2Body =>
-      'Know when your friends are talking to you, even if Duo is in the background.';
-
-  @override
-  String get onboardingPage3Title => 'Never miss a nudge';
-
-  @override
-  String get onboardingPage3Body =>
-      'Allow background activity so nudges reach you when Duo isn\'t open.';
 
   @override
   String get startupSetupFailed =>
@@ -604,6 +643,10 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get homeSomeoneLive => 'Someone is live — tap Join? to join';
+
+  @override
+  String get homeLiveVoiceLocked =>
+      'Live voice requires Duo Pro — nudges and chat stay free';
 
   @override
   String get homeInviteFriendVoice => 'invite a friend to enable voice service';

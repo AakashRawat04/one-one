@@ -157,6 +157,9 @@ class MainActivity : FlutterFragmentActivity() {
             InviteLinkContract.flutterChannel,
         )
         captureInviteLink(intent)
+        // Recover an invite code from a Play Store referrer on fresh installs.
+        // Must run after captureInviteLink so a direct App Link tap wins.
+        InstallReferrerReader.readOnce(this)
         voicePipChannel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             VoicePipContract.flutterChannel,

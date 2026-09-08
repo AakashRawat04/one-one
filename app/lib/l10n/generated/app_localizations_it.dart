@@ -202,6 +202,24 @@ class AppLocalizationsIt extends AppLocalizations {
   String get settingsViewPlans => 'Vedi i piani';
 
   @override
+  String settingsTrialDaysLeft(int count) {
+    return '$count giorni rimasti di prova gratuita';
+  }
+
+  @override
+  String get settingsTrialOneDayLeft => '1 giorno rimasto di prova gratuita';
+
+  @override
+  String get settingsTrialLessThanADay => 'Meno di un giorno di prova gratuita';
+
+  @override
+  String get settingsFreePlanSubtitle =>
+      'Piano gratuito — la voce live richiede Duo Pro';
+
+  @override
+  String get settingsDuoProActiveSubtitle => 'Hai Duo Pro';
+
+  @override
   String get settingsManageSubscription => 'Gestisci abbonamento';
 
   @override
@@ -481,6 +499,9 @@ class AppLocalizationsIt extends AppLocalizations {
   String get noGroupsShareInvite => 'Condividi un invito';
 
   @override
+  String get noGroupsInviteClosedOnes => 'Invita i tuoi cari';
+
+  @override
   String get noGroupsHavePin => 'Hai già un gruppo? Usa il PIN di un amico.';
 
   @override
@@ -488,6 +509,41 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String get noGroupsNeedGroupFirst => 'Unisciti o crea prima un gruppo';
+
+  @override
+  String get inviteSheetTitle => 'Invita i tuoi cari';
+
+  @override
+  String get inviteSheetGroupNameLabel => 'Dai un nome al gruppo';
+
+  @override
+  String get inviteSheetGroupNameHint => 'es. Famiglia, Amici…';
+
+  @override
+  String get inviteSheetContactsHeader => 'Seleziona chi invitare';
+
+  @override
+  String get inviteSheetSearchHint => 'Cerca contatti';
+
+  @override
+  String get inviteSheetNoContacts => 'Nessun contatto trovato';
+
+  @override
+  String get inviteSheetPermissionDenied =>
+      'Consenti l\'accesso ai contatti per vedere chi invitare';
+
+  @override
+  String get inviteSheetPermissionButton => 'Consenti accesso ai contatti';
+
+  @override
+  String get inviteSheetSendButton => 'Crea gruppo e invia invito';
+
+  @override
+  String get inviteSheetCreating => 'Creazione gruppo…';
+
+  @override
+  String get inviteSheetGroupNameRequired =>
+      'Inserisci un nome per il gruppo per continuare';
 
   @override
   String get createGroupTitle => 'crea gruppo';
@@ -547,6 +603,16 @@ class AppLocalizationsIt extends AppLocalizations {
       'Impossibile aprire la gestione dell\'abbonamento.';
 
   @override
+  String get trialExpiredTitle => 'La prova gratuita è terminata';
+
+  @override
+  String get trialExpiredBody =>
+      'Continua a parlare con i tuoi amici con Duo Pro.';
+
+  @override
+  String get trialExpiredGetPro => 'Passa a Pro';
+
+  @override
   String get crashTitle => 'L\'app ha riscontrato un problema';
 
   @override
@@ -562,33 +628,6 @@ class AppLocalizationsIt extends AppLocalizations {
   @override
   String get crashSendFailed =>
       'Impossibile inviare il report. Controlla la connessione e riprova.';
-
-  @override
-  String get onboardingContinue => 'Continua';
-
-  @override
-  String get onboardingGetStarted => 'Inizia';
-
-  @override
-  String get onboardingPage1Title => 'Parla all\'istante';
-
-  @override
-  String get onboardingPage1Body =>
-      'Tieni premuto per parlare così i tuoi amici ti sentono appena parli.';
-
-  @override
-  String get onboardingPage2Title => 'Resta aggiornato';
-
-  @override
-  String get onboardingPage2Body =>
-      'Scopri quando i tuoi amici ti parlano, anche se Duo è in background.';
-
-  @override
-  String get onboardingPage3Title => 'Non perdere nessun nudge';
-
-  @override
-  String get onboardingPage3Body =>
-      'Consenti l\'attività in background così i nudge ti raggiungono quando Duo non è aperto.';
 
   @override
   String get startupSetupFailed =>
@@ -607,6 +646,10 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String get homeSomeoneLive => 'Qualcuno è live — tocca Unirti?';
+
+  @override
+  String get homeLiveVoiceLocked =>
+      'La voce live richiede Duo Pro — nudge e chat restano gratis';
 
   @override
   String get homeInviteFriendVoice => 'invita un amico per abilitare la voce';

@@ -65,6 +65,30 @@ class _NoGroupsScreenState extends State<NoGroupsScreen> {
     );
   }
 
+  void _openInviteContactsSheet(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => InviteContactsSheet(
+        session: widget.session,
+        identityRepository: widget.identityRepository,
+        onGroupCreated: () {
+          // Navigate to home — group was just created inside the sheet.
+          Navigator.of(context).pushAndRemoveUntil(
+            MaterialPageRoute<void>(
+              builder: (_) => IdentityHomeScreen(
+                initialSession: widget.session,
+                identityRepository: widget.identityRepository,
+              ),
+            ),
+            (route) => false,
+          );
+        },
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -121,13 +145,36 @@ class _NoGroupsScreenState extends State<NoGroupsScreen> {
                         ).textTheme.bodyLarge?.copyWith(color: Colors.white),
                       ),
                       SizedBox(height: 28.h),
-                      FilledButton.icon(
-                        onPressed: () => _openCreateGroup(context),
-                        icon: const Icon(Icons.group_add_rounded),
-                        label: Text(context.l10n.noGroupsCreate),
-                        style: FilledButton.styleFrom(
-                          backgroundColor: const Color(0xffF8BE03),
-                          foregroundColor: Colors.black,
+                      // Primary CTA: invite contacts and create group in one shot.
+                      SizedBox(
+                        width: double.infinity,
+                        child: FilledButton.icon(
+                          onPressed: () => _openInviteContactsSheet(context),
+                          icon: const Icon(Icons.people_alt_rounded),
+                          label: Text(context.l10n.noGroupsInviteClosedOnes),
+                          style: FilledButton.styleFrom(
+                            backgroundColor: const Color(0xffF8BE03),
+                            foregroundColor: Colors.black,
+                            padding: EdgeInsets.symmetric(vertical: 16.h),
+                            textStyle: TextStyle(
+                              fontSize: 16.sp,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ),
+                      SizedBox(height: 14.h),
+                      // Secondary: create group manually.
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton.icon(
+                          onPressed: () => _openCreateGroup(context),
+                          icon: const Icon(Icons.group_add_rounded),
+                          label: Text(context.l10n.noGroupsCreate),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: Colors.white70,
+                            side: const BorderSide(color: Colors.white24),
+                          ),
                         ),
                       ),
                       SizedBox(height: 10.h),

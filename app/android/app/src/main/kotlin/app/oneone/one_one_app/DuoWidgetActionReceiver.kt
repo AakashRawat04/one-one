@@ -45,6 +45,11 @@ class DuoWidgetActionReceiver : BroadcastReceiver() {
                     DuoWidgetLog.w("A-10", "RING ignored — blank groupId")
                     return
                 }
+                DuoWidgetActionFeedback.show(
+                    appContext,
+                    groupId,
+                    DuoWidgetActionFeedback.Kind.RINGING,
+                )
                 val pendingResult = goAsync()
                 DuoWidgetApi.submit {
                     try {
@@ -69,6 +74,11 @@ class DuoWidgetActionReceiver : BroadcastReceiver() {
                     }
                     return
                 }
+                DuoWidgetActionFeedback.show(
+                    appContext,
+                    groupId,
+                    DuoWidgetActionFeedback.Kind.NOTIFIED,
+                )
                 val pendingResult = goAsync()
                 DuoWidgetApi.submit {
                     try {

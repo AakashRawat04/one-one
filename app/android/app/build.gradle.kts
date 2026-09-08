@@ -86,4 +86,8 @@ dependencies {
     // branded splash on screen until Flutter signals it's actually ready,
     // instead of Android auto-dismissing a native splash at first frame.
     implementation("androidx.core:core-splashscreen:1.2.0")
+    // Play Install Referrer — reads the referrer string passed when the user
+    // installs via a Play Store link that includes a referrer= parameter.
+    // Used to recover an invite code after a fresh install from an invite link.
+    implementation("com.android.installreferrer:installreferrer:2.2")
 }

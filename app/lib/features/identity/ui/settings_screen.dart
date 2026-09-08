@@ -89,6 +89,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   /// `_dependents.isEmpty` assertions.
   bool _profileEditorOpen = false;
   String? _message;
+  DuoAccessSnapshot? _duoAccess;
 
   Future<List<AvatarAsset>>? _avatarsFuture;
 
@@ -103,6 +104,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
     _avatarsFuture = AvatarAssets.loadAll();
     unawaited(HomeVisualVariantController.ensureLoaded());
+    unawaited(_loadDuoAccess());
     final currentSession = widget.identityRepository.currentSession;
     if (currentSession != null && currentSession.userId == _session.userId) {
       _session = currentSession;
@@ -544,6 +546,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (groupEnded && mounted) Navigator.of(context).pop();
   }
 
+  Future<void> _loadDuoAccess() async {
+    final snapshot = await FreeTrialAccess.snapshot(userId: _session.userId);
+    if (!mounted) return;
+    setState(() => _duoAccess = snapshot);
+  }
+
+  String _duoProSubtitle(AppLocalizations l10n) {
+    final access = _duoAccess;
+    if (access == null) return l10n.settingsViewPlans;
+    if (access.entitledToPro) return l10n.settingsDuoProActiveSubtitle;
+    if (access.trialActive) {
+      final days = FreeTrialAccess.remainingWholeDays(access.remaining);
+      if (days <= 0) return l10n.settingsTrialLessThanADay;
+      if (days == 1) return l10n.settingsTrialOneDayLeft;
+      return l10n.settingsTrialDaysLeft(days);
+    }
+    return l10n.settingsFreePlanSubtitle;
+  }
+
   /// Opens the in-app Duo Pro paywall (branded UI + RevenueCat packages).
   Future<void> _showPaywall() async {
     unawaited(
@@ -561,6 +582,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     try {
       final purchased = await ElevenProPaywallScreen.open(context);
       if (!mounted) return;
+      await _loadDuoAccess();
       if (purchased) {
         setState(() => _message = context.l10n.settingsWelcomeDuoPro);
       }
@@ -913,7 +935,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
               _SettingsSurface(
                 padding: EdgeInsets.zero,
                 children: [
-                  _ElevenProSettingsCard(onTap: _showPaywall),
+                  _ElevenProSettingsCard(
+                    onTap: _showPaywall,
+                    subtitle: _duoProSubtitle(l10n),
+                  ),
                   const _SurfaceDivider(indent: 52),
                   _NavigationRow(
                     icon: Icons.mail_outline_rounded,
@@ -1787,9 +1812,13 @@ class _SectionTitle extends StatelessWidget {
 }
 
 class _ElevenProSettingsCard extends StatelessWidget {
-  const _ElevenProSettingsCard({required this.onTap});
+  const _ElevenProSettingsCard({
+    required this.onTap,
+    required this.subtitle,
+  });
 
   final VoidCallback onTap;
+  final String subtitle;
 
   @override
   Widget build(BuildContext context) {
@@ -1816,7 +1845,7 @@ class _ElevenProSettingsCard extends StatelessWidget {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    context.l10n.settingsViewPlans,
+                    subtitle,
                     style: const TextStyle(color: Colors.white54, fontSize: 13),
                   ),
                 ],
