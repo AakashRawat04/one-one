@@ -59,6 +59,7 @@ mixin _IdentityHomeGroups on _IdentityHomeBase {
         }
       });
       _syncDuoWidget();
+      _syncWidgetAvailabilityListeners();
       LogManager.setIdentity(groupId: selected?.groupId ?? '');
       if (selected != null) {
         unawaited(AppTelemetry.setActiveGroup(selected.groupId));
@@ -88,11 +89,14 @@ mixin _IdentityHomeGroups on _IdentityHomeBase {
       if (mounted && _loadingGroups) {
         setState(() => _loadingGroups = false);
         logStartupMilestone('Home data interactive', stopwatch);
-        unawaited(_takePendingNudgeAction());
-        unawaited(_takePendingInviteLink());
         unawaited(_clearOpenedChatPiles());
-        unawaited(_refreshLiveVoiceAccess());
-        unawaited(_maybeShowPostTrialPaywall());
+        unawaited(
+          _syncLiveVoiceAccess().then((_) async {
+            if (!mounted) return;
+            await _takePendingNudgeAction();
+            await _takePendingInviteLink();
+          }),
+        );
         final pendingGroupIds = _pendingUserGroupIds;
         _pendingUserGroupIds = null;
         if (pendingGroupIds != null) {
@@ -343,8 +347,10 @@ mixin _IdentityHomeGroups on _IdentityHomeBase {
             }
           }
           setState(() => _availability = next);
+          _widgetAvailabilityByGroupId[groupId] = next;
           _hasAvailabilitySnapshot = true;
           _scheduleAvailabilityExpiryRefresh();
+          _syncDuoWidget();
           if (_onlineSession?.groupId == groupId) {
             _evaluatePeerPresenceForAutoOffline(next);
           }
@@ -443,5 +449,55 @@ mixin _IdentityHomeGroups on _IdentityHomeBase {
     if (index < 0) return;
 
     _carouselIndex = index;
+  }
+
+  void _syncWidgetAvailabilityListeners() {
+    if (!Platform.isAndroid) return;
+    final groupIds = _groups.map((group) => group.groupId).toSet();
+    for (final groupId in _widgetAvailabilitySubscriptions.keys.toList()) {
+      if (groupIds.contains(groupId)) continue;
+      unawaited(_widgetAvailabilitySubscriptions.remove(groupId)?.cancel());
+      _widgetAvailabilityByGroupId.remove(groupId);
+    }
+    for (final groupId in groupIds) {
+      if (_widgetAvailabilitySubscriptions.containsKey(groupId)) continue;
+      _widgetAvailabilitySubscriptions[groupId] = AppDatabase.instance()
+          .ref('memberAvailability/$groupId')
+          .onValue
+          .listen((event) {
+            if (!mounted) return;
+            final value = event.snapshot.value;
+            final next = <String, MemberAvailability>{};
+            if (value is Map<Object?, Object?>) {
+              for (final entry in value.entries) {
+                final raw = entry.value;
+                if (raw is Map<Object?, Object?>) {
+                  next[entry.key.toString()] = MemberAvailability.fromJson(raw);
+                }
+              }
+            }
+            final previous = _widgetAvailabilityByGroupId[groupId];
+            final previousLive = previous == null
+                ? const <String>{}
+                : previous.entries
+                      .where((entry) => entry.value.isLive)
+                      .map((entry) => entry.key)
+                      .toSet();
+            final nextLive = next.entries
+                .where((entry) => entry.value.isLive)
+                .map((entry) => entry.key)
+                .toSet();
+            _widgetAvailabilityByGroupId[groupId] = next;
+            if (!_setEquals(previousLive, nextLive)) {
+              _syncDuoWidget();
+            }
+          });
+    }
+  }
+
+  bool _setEquals(Set<String> a, Set<String> b) {
+    if (identical(a, b)) return true;
+    if (a.length != b.length) return false;
+    return a.containsAll(b);
   }
 }

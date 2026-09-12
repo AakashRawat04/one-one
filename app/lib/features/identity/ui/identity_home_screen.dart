@@ -64,6 +64,11 @@ abstract class _IdentityHomeBase extends State<IdentityHomeScreen>
   // Isolated from _membersByGroupId so widget backfill cannot race home
   // group-loading or change carousel / presence behavior.
   Map<String, List<GroupMemberSummary>> _widgetMembersByGroupId = {};
+  final Map<String, Map<String, MemberAvailability>>
+  _widgetAvailabilityByGroupId = {};
+  final Map<String, StreamSubscription<DatabaseEvent>>
+  _widgetAvailabilitySubscriptions = {};
+  Timer? _widgetSyncDebounce;
   Map<String, MemberAvailability> _availability = {};
   Set<String> _speakingUserIds = {};
   List<GroupChatMessage> _chatMessages = const [];
@@ -158,7 +163,9 @@ abstract class _IdentityHomeBase extends State<IdentityHomeScreen>
   // Caps continuous call mode at PresenceConfig.callModeTimeout; cancelled
   // whenever the local user leaves call mode (manual toggle, go-away, etc.).
   Timer? _callModeTimeoutTimer;
+  Timer? _trialExpiryTimer;
   bool _voicePaywallOpen = false;
+
   /// Null until [FreeTrialAccess.snapshot] returns — Join? stays hidden
   /// until we know live voice is allowed.
   bool? _hasLiveVoiceAccess;
@@ -226,8 +233,7 @@ abstract class _IdentityHomeBase extends State<IdentityHomeScreen>
   Future<void> _goOnline({bool userIntent = false});
   Future<void> _switchVoiceGroup();
   Future<bool> _presentVoicePaywall();
-  Future<void> _refreshLiveVoiceAccess();
-  Future<void> _maybeShowPostTrialPaywall();
+  Future<void> _syncLiveVoiceAccess();
   Future<void> _goAway({String reason = 'user_away'});
   Future<void> _toggleConnectionMode();
   Future<void> _connectLiveKit(OnlineSession session, {Room? preparedRoom});
@@ -361,11 +367,15 @@ class _IdentityHomeScreenState extends _IdentityHomeBase
       WidgetsBinding.instance.addPostFrameCallback((_) {
         logStartupMilestone('Home visible');
         logStartupMilestone('Home data interactive');
-        unawaited(_takePendingNudgeAction());
-        unawaited(_takePendingInviteLink());
         unawaited(_clearOpenedChatPiles());
-        unawaited(_refreshLiveVoiceAccess());
-        unawaited(_maybeShowPostTrialPaywall());
+        // Lock Home status for free users; full paywall only on live-voice try.
+        unawaited(
+          _syncLiveVoiceAccess().then((_) async {
+            if (!mounted) return;
+            await _takePendingNudgeAction();
+            await _takePendingInviteLink();
+          }),
+        );
       });
     } else {
       unawaited(_loadGroups());
@@ -415,6 +425,7 @@ class _IdentityHomeScreenState extends _IdentityHomeBase
       _listenToMemberProfiles(_members);
     }
     unawaited(_reportMediaVolume());
+    _syncWidgetAvailabilityListeners();
   }
 
   /// Android-only: pushes the current group roster + last-active group to
@@ -423,12 +434,12 @@ class _IdentityHomeScreenState extends _IdentityHomeBase
   @override
   void _syncDuoWidget() {
     if (!Platform.isAndroid) return;
-    _publishDuoWidgetSnapshot();
-    // The widget can page through every group via its "next" control, but
-    // _membersByGroupId here is normally only populated for whichever group
-    // is currently focused in-app. Backfill into a widget-only cache so
-    // home state is left untouched.
-    unawaited(_backfillWidgetMembersAndResync());
+    _widgetSyncDebounce?.cancel();
+    _widgetSyncDebounce = Timer(const Duration(milliseconds: 120), () {
+      if (!mounted) return;
+      _publishDuoWidgetSnapshot();
+      unawaited(_backfillWidgetMembersAndResync());
+    });
   }
 
   void _publishDuoWidgetSnapshot() {
@@ -443,6 +454,11 @@ class _IdentityHomeScreenState extends _IdentityHomeBase
               _membersByGroupId[group.groupId] ??
               _widgetMembersByGroupId[group.groupId] ??
               const [];
+          final availability =
+              _widgetAvailabilityByGroupId[group.groupId] ??
+              (group.groupId == _selectedGroup?.groupId
+                  ? _availability
+                  : const <String, MemberAvailability>{});
           return DuoWidgetGroupSnapshot(
             groupId: group.groupId,
             name: group.name,
@@ -453,7 +469,7 @@ class _IdentityHomeScreenState extends _IdentityHomeBase
                     displayName: member.displayName,
                     photoUrl: member.profilePhotoUrl,
                     avatarAsset: member.avatarAsset,
-                    online: _availability[member.userId]?.isLive ?? false,
+                    online: availability[member.userId]?.isLive ?? false,
                   ),
                 )
                 .toList(),
@@ -543,6 +559,11 @@ class _IdentityHomeScreenState extends _IdentityHomeBase
     );
     _availabilitySubscription?.cancel();
     _availabilityExpiryTimer?.cancel();
+    _widgetSyncDebounce?.cancel();
+    for (final sub in _widgetAvailabilitySubscriptions.values) {
+      unawaited(sub.cancel());
+    }
+    _widgetAvailabilitySubscriptions.clear();
     _membersSubscription?.cancel();
     _chatMessagesSubscription?.cancel();
     _emojiBurstSubscription?.cancel();
@@ -574,6 +595,7 @@ class _IdentityHomeScreenState extends _IdentityHomeBase
     _callModeTimeoutTimer?.cancel();
     _usagePersistTimer?.cancel();
     _incomingExpiryTimer?.cancel();
+    _trialExpiryTimer?.cancel();
     // Persist final usage before disposal.
     // 2. Flush usage, stop talk, drop LiveKit.
     if (_todayOnlineSeconds > 0 && _onlineSession != null) {
@@ -603,16 +625,15 @@ class _IdentityHomeScreenState extends _IdentityHomeBase
       try {
         unawaited(_refreshDeviceRegistration());
         unawaited(_reportMediaVolume());
-        unawaited(_refreshLiveVoiceAccess());
-        unawaited(_maybeShowPostTrialPaywall());
-        // Notification Accept/Connect taps are queued natively and consumed
-        // here. Opening the app by itself must not start a LiveKit session —
-        // `_goOnline` still requires `_explicitJoinIntent`.
-        unawaited(_takePendingNudgeAction());
-        unawaited(_takePendingInviteLink());
-        // The user is now actively looking at the app, so any pile that
-        // accumulated while backgrounded should be cleared.
-        unawaited(_clearOpenedChatPiles());
+        // Refresh Home lock hint; then consume pending Accept taps.
+        unawaited(
+          _syncLiveVoiceAccess().then((_) async {
+            if (!mounted) return;
+            await _takePendingNudgeAction();
+            await _takePendingInviteLink();
+            await _clearOpenedChatPiles();
+          }),
+        );
         if (!_liveSessionActiveOnBackground && !_explicitJoinIntent) {
           LogManager.log(
             LogLevel.info,

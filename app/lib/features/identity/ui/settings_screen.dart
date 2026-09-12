@@ -90,6 +90,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _profileEditorOpen = false;
   String? _message;
   DuoAccessSnapshot? _duoAccess;
+  String? _appVersion;
 
   Future<List<AvatarAsset>>? _avatarsFuture;
 
@@ -104,6 +105,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
     _avatarsFuture = AvatarAssets.loadAll();
     unawaited(HomeVisualVariantController.ensureLoaded());
+    unawaited(_loadAppVersion());
     unawaited(_loadDuoAccess());
     final currentSession = widget.identityRepository.currentSession;
     if (currentSession != null && currentSession.userId == _session.userId) {
@@ -292,6 +294,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _hapticsIntensity = previous;
         _message = error.toString();
       });
+    }
+  }
+
+  Future<void> _loadAppVersion() async {
+    try {
+      final info = await PackageInfo.fromPlatform();
+      if (!mounted) return;
+      setState(() {
+        _appVersion = '${info.version}+${info.buildNumber}';
+      });
+    } catch (_) {
+      // Version footer is best-effort.
     }
   }
 
@@ -855,6 +869,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     enabled: !_saving,
                     onSelected: _setHapticsIntensity,
                   ),
+                  const _SurfaceDivider(),
+                  _PreferenceHeading(
+                    icon: Icons.wallpaper_outlined,
+                    title: l10n.settingsHomeBackgroundTitle,
+                    subtitle: l10n.settingsHomeBackgroundSubtitle,
+                  ),
+                  const SizedBox(height: 14),
+                  ValueListenableBuilder<HomeVisualVariant>(
+                    valueListenable: HomeVisualVariantController.current,
+                    builder: (context, variant, _) {
+                      return _HomeBackgroundOptionRow(
+                        illustrated: variant.isIllustrated,
+                        accent: accent,
+                        enabled: !_saving,
+                        onSelected: (illustrated) => unawaited(
+                          HomeVisualVariantController.setIllustrated(
+                            illustrated,
+                          ),
+                        ),
+                      );
+                    },
+                  ),
                 ],
               ),
               SettingsLanguageSection(
@@ -1067,6 +1103,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   _message!,
                   textAlign: TextAlign.center,
                   style: const TextStyle(color: Colors.white70),
+                ),
+              ],
+              if (_appVersion != null) ...[
+                const SizedBox(height: 28),
+                Text(
+                  l10n.settingsAppVersion(_appVersion!),
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.38),
+                    fontSize: 12,
+                    letterSpacing: 0.2,
+                  ),
                 ),
               ],
             ],
@@ -1889,6 +1937,105 @@ class _HapticsTierRow extends StatelessWidget {
           ),
         ],
       ],
+    );
+  }
+}
+
+class _HomeBackgroundOptionRow extends StatelessWidget {
+  const _HomeBackgroundOptionRow({
+    required this.illustrated,
+    required this.accent,
+    required this.enabled,
+    required this.onSelected,
+  });
+
+  final bool illustrated;
+  final Color accent;
+  final bool enabled;
+  final ValueChanged<bool> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = context.l10n;
+    return Row(
+      children: [
+        Expanded(
+          child: _HomeBackgroundOptionChip(
+            label: l10n.settingsHomeBackgroundDefault,
+            selected: !illustrated,
+            accent: accent,
+            enabled: enabled,
+            onTap: () => onSelected(false),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: _HomeBackgroundOptionChip(
+            label: l10n.settingsHomeBackgroundIllustrated,
+            selected: illustrated,
+            accent: accent,
+            enabled: enabled,
+            onTap: () => onSelected(true),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _HomeBackgroundOptionChip extends StatelessWidget {
+  const _HomeBackgroundOptionChip({
+    required this.label,
+    required this.selected,
+    required this.accent,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final Color accent;
+  final bool enabled;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final labelColor = selected ? accent : Colors.white54;
+    return Opacity(
+      opacity: enabled ? 1 : 0.45,
+      child: InkWell(
+        onTap: enabled ? onTap : null,
+        borderRadius: BorderRadius.circular(12),
+        splashColor: accent.withValues(alpha: 0.12),
+        highlightColor: accent.withValues(alpha: 0.06),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          child: Column(
+            children: [
+              Text(
+                label,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: labelColor,
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w600,
+                  fontSize: 13,
+                ),
+              ),
+              const SizedBox(height: 8),
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 180),
+                curve: Curves.easeOut,
+                height: 2,
+                width: selected ? 28 : 0,
+                decoration: BoxDecoration(
+                  color: accent,
+                  borderRadius: BorderRadius.circular(1),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

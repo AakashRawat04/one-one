@@ -107,6 +107,11 @@ class DuoWidgetActionReceiver : BroadcastReceiver() {
                     IncomingNudgeStore.markStatus(appContext, eventId, "accepted")
                     IncomingNudgeDispatcher.signalStatus(eventId, "accepted")
                 }
+                DuoWidgetActionFeedback.show(
+                    appContext,
+                    groupId,
+                    DuoWidgetActionFeedback.Kind.JOINING,
+                )
                 val senderUserId = pending?.get("senderUserId")
                 val notificationId = eventId?.let { VoiceNudgeNotifications.idFor(it) }
                 val openIntent = Intent(appContext, MainActivity::class.java).apply {
@@ -150,6 +155,11 @@ class DuoWidgetActionReceiver : BroadcastReceiver() {
                     IncomingNudgeStore.markStatus(appContext, eventId, "declined")
                     IncomingNudgeDispatcher.signalStatus(eventId, "declined")
                 }
+                DuoWidgetActionFeedback.show(
+                    appContext,
+                    groupId,
+                    DuoWidgetActionFeedback.Kind.DECLINED,
+                )
                 if (responseUrl.isNullOrBlank()) {
                     refreshWidget(appContext, appWidgetId)
                     return

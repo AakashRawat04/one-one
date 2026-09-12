@@ -332,6 +332,30 @@ abstract class AppLocalizations {
   /// **'Continuous vibration for the whole nudge.'**
   String get hapticsWildDetail;
 
+  /// No description provided for @settingsHomeBackgroundTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Home background'**
+  String get settingsHomeBackgroundTitle;
+
+  /// No description provided for @settingsHomeBackgroundSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose the backdrop on your home screen.'**
+  String get settingsHomeBackgroundSubtitle;
+
+  /// No description provided for @settingsHomeBackgroundDefault.
+  ///
+  /// In en, this message translates to:
+  /// **'Default'**
+  String get settingsHomeBackgroundDefault;
+
+  /// No description provided for @settingsHomeBackgroundIllustrated.
+  ///
+  /// In en, this message translates to:
+  /// **'Illustrated'**
+  String get settingsHomeBackgroundIllustrated;
+
   /// No description provided for @settingsSaveColor.
   ///
   /// In en, this message translates to:
@@ -343,6 +367,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Settings saved'**
   String get settingsSaved;
+
+  /// No description provided for @settingsAppVersion.
+  ///
+  /// In en, this message translates to:
+  /// **'Version {version}'**
+  String settingsAppVersion(String version);
 
   /// No description provided for @settingsSectionBackground.
   ///
@@ -461,19 +491,19 @@ abstract class AppLocalizations {
   /// No description provided for @settingsTrialDaysLeft.
   ///
   /// In en, this message translates to:
-  /// **'{count} days left in free trial'**
+  /// **'⌛ {count} days left'**
   String settingsTrialDaysLeft(int count);
 
   /// No description provided for @settingsTrialOneDayLeft.
   ///
   /// In en, this message translates to:
-  /// **'1 day left in free trial'**
+  /// **'⌛ 1 day left'**
   String get settingsTrialOneDayLeft;
 
   /// No description provided for @settingsTrialLessThanADay.
   ///
   /// In en, this message translates to:
-  /// **'Less than a day left in your free trial'**
+  /// **'⌛ Less than a day left'**
   String get settingsTrialLessThanADay;
 
   /// No description provided for @settingsFreePlanSubtitle.

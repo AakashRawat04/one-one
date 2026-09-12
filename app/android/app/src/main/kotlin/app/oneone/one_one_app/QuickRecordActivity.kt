@@ -9,7 +9,6 @@ import android.os.Handler
 import android.os.Looper
 import android.view.MotionEvent
 import android.view.View
-import android.widget.ImageView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.content.ContextCompat
@@ -17,10 +16,9 @@ import java.io.File
 import java.util.concurrent.Executors
 
 /**
- * Native, transparent, Assistant-style overlay for one-tap voice nudges from
- * the home-screen widget. Recording auto-starts once RECORD_AUDIO is
- * granted; the mic format matches the in-app sender exactly (AAC-LC M4A,
- * 32kbps, 16kHz mono) so both paths produce interchangeable files.
+ * Native, translucent overlay for one-tap voice nudges from the home-screen
+ * widget. Recording auto-starts once RECORD_AUDIO is granted; the mic format
+ * matches the in-app sender exactly (AAC-LC M4A, 32kbps, 16kHz mono).
  */
 class QuickRecordActivity : Activity() {
     private var recorder: MediaRecorder? = null
@@ -35,10 +33,9 @@ class QuickRecordActivity : Activity() {
     private lateinit var hintText: TextView
     private lateinit var targetText: TextView
     private lateinit var recordingBadge: TextView
-    private lateinit var controlsRow: View
+    private lateinit var timerText: TextView
+    private lateinit var halo: View
     private lateinit var sheet: View
-    private lateinit var cancelButton: ImageView
-    private lateinit var sendButton: ImageView
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val ioExecutor = Executors.newSingleThreadExecutor()
@@ -51,11 +48,21 @@ class QuickRecordActivity : Activity() {
                 } catch (_: Exception) {
                     0
                 }
-                // MediaRecorder amplitude is roughly 0..32767 for 16-bit PCM.
                 val level = (amplitude / 9000f).coerceIn(0f, 1f)
                 visualizer.setLevel(level)
+                halo.alpha = 0.35f + level * 0.55f
                 mainHandler.postDelayed(this, 50)
             }
+        }
+    }
+    private val tickRunnable = object : Runnable {
+        override fun run() {
+            if (stopped || sending) return
+            val elapsed = System.currentTimeMillis() - recordingStartedAtMs
+            val remainingMs = (maxRecordingMs - elapsed).coerceAtLeast(0L)
+            val seconds = ((remainingMs + 999L) / 1000L).toInt().coerceAtLeast(0)
+            timerText.text = "0:${seconds.toString().padStart(2, '0')}"
+            mainHandler.postDelayed(this, 100)
         }
     }
     private val autoStopRunnable = Runnable { onSendTapped() }
@@ -77,13 +84,14 @@ class QuickRecordActivity : Activity() {
         hintText = findViewById(R.id.hint_text)
         targetText = findViewById(R.id.target_text)
         recordingBadge = findViewById(R.id.recording_badge)
-        controlsRow = findViewById(R.id.controls_row)
+        timerText = findViewById(R.id.timer_text)
+        halo = findViewById(R.id.orb_glow)
         sheet = findViewById(R.id.quick_record_sheet)
-        cancelButton = findViewById(R.id.btn_cancel)
-        sendButton = findViewById(R.id.btn_send)
+        halo.alpha = 0.4f
 
         val displayName = groupName ?: "this group"
-        targetText.text = displayName
+        targetText.text = "Voice nudge to $displayName"
+        timerText.text = "0:${(maxRecordingMs / 1000).toString().padStart(2, '0')}"
 
         if (isGroupLive(groupId)) {
             DuoWidgetLog.w("Q-02", "QuickRecord aborted — group already live")
@@ -93,9 +101,6 @@ class QuickRecordActivity : Activity() {
             return
         }
 
-        // Widget accent is user-customizable, but the overlay itself always
-        // reads as Duo's own surface — brand yellow, not whatever accent
-        // the group happens to be tinted.
         visualizer.setAccentColor(android.graphics.Color.parseColor("#F8BE03"))
 
         findViewById<View>(R.id.quick_record_root).setOnTouchListener { _, event ->
@@ -108,9 +113,6 @@ class QuickRecordActivity : Activity() {
             }
             false
         }
-        cancelButton.setOnClickListener { onCancelTapped() }
-        sendButton.setOnClickListener { onSendTapped() }
-
         if (hasRecordPermission()) {
             startRecording()
         } else {
@@ -142,11 +144,9 @@ class QuickRecordActivity : Activity() {
             PackageManager.PERMISSION_GRANTED
 
     private fun requestRecordPermission() {
-        hintText.text = "Allow microphone access"
-        recordingBadge.text = "Permission needed"
-        recordingBadge.setTextColor(
-            ContextCompat.getColor(this, R.color.widget_text_secondary),
-        )
+        hintText.text = "Microphone access is needed"
+        recordingBadge.text = "Allow mic"
+        timerText.visibility = View.GONE
         visualizer.reset()
         requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), permissionRequestCode)
     }
@@ -173,13 +173,12 @@ class QuickRecordActivity : Activity() {
             finish()
             return
         }
-        recordingBadge.visibility = View.VISIBLE
-        recordingBadge.text = "Recording…"
+        recordingBadge.text = "Recording"
         recordingBadge.setTextColor(
-            ContextCompat.getColor(this, R.color.widget_online_green),
+            ContextCompat.getColor(this, R.color.widget_text_primary),
         )
-        hintText.text = "Your voice is being recorded"
-        controlsRow.visibility = View.VISIBLE
+        hintText.text = "Tap outside to cancel"
+        timerText.visibility = View.VISIBLE
         val file = File(cacheDir, "widget_voice_nudge_${System.currentTimeMillis()}.m4a")
         outputFile = file
         try {
@@ -202,6 +201,7 @@ class QuickRecordActivity : Activity() {
             recordingStartedAtMs = System.currentTimeMillis()
             stopped = false
             mainHandler.post(amplitudePoll)
+            mainHandler.post(tickRunnable)
             mainHandler.postDelayed(autoStopRunnable, maxRecordingMs)
         } catch (error: Exception) {
             DeviceLog.warn("QuickRecord", "Failed to start recording: ${error.message}")
@@ -214,6 +214,7 @@ class QuickRecordActivity : Activity() {
         if (stopped) return outputFile
         stopped = true
         mainHandler.removeCallbacks(amplitudePoll)
+        mainHandler.removeCallbacks(tickRunnable)
         mainHandler.removeCallbacks(autoStopRunnable)
         val current = recorder
         recorder = null
@@ -256,13 +257,12 @@ class QuickRecordActivity : Activity() {
         }
         sending = true
         visualizer.reset()
-        recordingBadge.text = "Sending…"
+        recordingBadge.text = "Sending"
         recordingBadge.setTextColor(
             ContextCompat.getColor(this, R.color.widget_text_secondary),
         )
-        hintText.text = "Sending voice nudge…"
-        sendButton.isEnabled = false
-        cancelButton.isEnabled = false
+        hintText.text = "Almost there"
+        timerText.visibility = View.GONE
         val groupIdSnapshot = groupId
         if (groupIdSnapshot.isNullOrBlank()) {
             DuoWidgetLog.e("Q-10", "send aborted — blank groupId")
@@ -275,7 +275,6 @@ class QuickRecordActivity : Activity() {
             "send start groupSuffix=${groupIdSnapshot.takeLast(6)} " +
                 "durationMs=$clampedDurationMs fileBytes=${file.length()}",
         )
-        // Keep a copy so we can retry-log if delete races.
         val sendFile = file
         val displayName = groupName?.takeIf { it.isNotBlank() } ?: "group"
         ioExecutor.execute {
@@ -300,8 +299,13 @@ class QuickRecordActivity : Activity() {
                     is DuoWidgetApiResult.Success -> {
                         DuoWidgetLog.i("Q-20", "voice nudge sent OK")
                         showSentConfirmation(displayName)
+                        DuoWidgetActionFeedback.show(
+                            applicationContext,
+                            groupIdSnapshot,
+                            DuoWidgetActionFeedback.Kind.SENT,
+                        )
                         DuoWidgetRenderer.updateAll(applicationContext)
-                        mainHandler.postDelayed({ finish() }, 1_200)
+                        mainHandler.postDelayed({ finish() }, 900)
                     }
                     is DuoWidgetApiResult.Failure -> {
                         DuoWidgetLog.e("Q-21", "voice nudge send failed: ${result.message}")
@@ -311,10 +315,8 @@ class QuickRecordActivity : Activity() {
                             Toast.LENGTH_LONG,
                         ).show()
                         sending = false
-                        sendButton.isEnabled = true
-                        cancelButton.isEnabled = true
-                        recordingBadge.text = "Failed"
-                        hintText.text = "Couldn't send — close and try again"
+                        recordingBadge.text = "Couldn't send"
+                        hintText.text = "Tap outside to close"
                         finish()
                     }
                 }
@@ -327,11 +329,11 @@ class QuickRecordActivity : Activity() {
         recordingBadge.setTextColor(
             ContextCompat.getColor(this, R.color.widget_online_green),
         )
-        hintText.text = "Voice nudge sent to $displayName"
+        targetText.text = "Delivered to $displayName"
+        hintText.text = ""
         hintText.setTextColor(
             ContextCompat.getColor(this, R.color.widget_text_primary),
         )
-        controlsRow.visibility = View.GONE
     }
 
     override fun onDestroy() {

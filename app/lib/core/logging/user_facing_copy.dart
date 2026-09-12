@@ -3,8 +3,61 @@
 /// Worker names (`W1`, `FCM-W2`), channel IDs, and FCM checkpoints belong in
 /// Crashlytics / logcat — never in SnackBars, banners, or notifications.
 abstract final class UserFacingCopy {
+  /// FCM rejected every registered device (stale token, force-stop, etc.).
   static const notificationDeliveryFailure =
-      'Couldn\u2019t deliver notification. Please check your connection.';
+      'Couldn\u2019t reach their device. Ask them to open Duo with this account.';
+
+  /// Friend is in the group but has no active FCM registration — common when
+  /// they signed into a different Duo account on that phone.
+  static const recipientDeviceUnavailable =
+      'They\u2019re not reachable on this Duo account. '
+      'Ask them to open Duo signed into the account in this group.';
+
+  /// Named variant of [recipientDeviceUnavailable].
+  static String recipientDeviceUnavailableFor(Iterable<String> displayNames) {
+    final who = joinFirstNames(displayNames);
+    if (who == null) return recipientDeviceUnavailable;
+    final verb = _isPlural(displayNames) ? 'aren\u2019t' : 'isn\u2019t';
+    return '$who $verb reachable on this Duo account. '
+        'Ask them to open Duo signed into the account in this group.';
+  }
+
+  /// Named variant of [notificationDeliveryFailure].
+  static String notificationDeliveryFailureFor(Iterable<String> displayNames) {
+    final who = joinFirstNames(displayNames);
+    if (who == null) return notificationDeliveryFailure;
+    if (_isPlural(displayNames)) {
+      return 'Couldn\u2019t reach $who. Ask them to open Duo with this account.';
+    }
+    return 'Couldn\u2019t reach $who\u2019s device. '
+        'Ask them to open Duo with this account.';
+  }
+
+  /// Joins first names for sender-facing copy (`Alex`, `Alex and Sam`, …).
+  static String? joinFirstNames(Iterable<String> displayNames) {
+    final names = displayNames
+        .map(_firstName)
+        .where((name) => name.isNotEmpty)
+        .toList(growable: false);
+    if (names.isEmpty) return null;
+    if (names.length == 1) return names.first;
+    if (names.length == 2) return '${names[0]} and ${names[1]}';
+    return '${names.sublist(0, names.length - 1).join(', ')}, and ${names.last}';
+  }
+
+  static bool _isPlural(Iterable<String> displayNames) {
+    return displayNames
+            .map(_firstName)
+            .where((name) => name.isNotEmpty)
+            .length >
+        1;
+  }
+
+  static String _firstName(String displayName) {
+    final trimmed = displayName.trim();
+    if (trimmed.isEmpty) return '';
+    return trimmed.split(RegExp(r'\s+')).first;
+  }
 
   /// Checkpoint codes such as `FCM-W1`, `FCM-BE-W1`, `DART-W1`, `[FCM-W2]`.
   static final _checkpointCode = RegExp(

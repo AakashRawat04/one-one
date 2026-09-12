@@ -73,6 +73,7 @@ void main() {
       );
       expect(HomeVisualVariant.screen1.usesDoodleBackdrop, isTrue);
       expect(HomeVisualVariant.screen2.usesDoodleBackdrop, isTrue);
+      expect(HomeVisualVariantController.illustratedLook, HomeVisualVariant.screen2);
     });
   });
 }

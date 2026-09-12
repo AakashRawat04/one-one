@@ -43,8 +43,16 @@
   "hapticsLightDetail": "Two taps at the start and two at the end.",
   "hapticsPulseDetail": "A double-double burst — two quick pairs.",
   "hapticsWildDetail": "Continuous vibration for the whole nudge.",
+  "settingsHomeBackgroundTitle": "Home background",
+  "settingsHomeBackgroundSubtitle": "Choose the backdrop on your home screen.",
+  "settingsHomeBackgroundDefault": "Default",
+  "settingsHomeBackgroundIllustrated": "Illustrated",
   "settingsSaveColor": "Save color",
   "settingsSaved": "Settings saved",
+  "settingsAppVersion": "Version {version}",
+  "@settingsAppVersion": {
+    "placeholders": { "version": { "type": "String" } }
+  },
   "settingsSectionBackground": "Background reliability",
   "settingsMicPermission": "Microphone permission",
   "settingsMicReady": "Ready",
@@ -64,12 +72,12 @@
   "settingsSectionSubscription": "Subscription",
   "settingsDuoPro": "Duo Pro",
   "settingsViewPlans": "View plans",
-  "settingsTrialDaysLeft": "{count} days left in free trial",
+  "settingsTrialDaysLeft": "⌛ {count} days left",
   "@settingsTrialDaysLeft": {
     "placeholders": { "count": { "type": "int" } }
   },
-  "settingsTrialOneDayLeft": "1 day left in free trial",
-  "settingsTrialLessThanADay": "Less than a day left in your free trial",
+  "settingsTrialOneDayLeft": "⌛ 1 day left",
+  "settingsTrialLessThanADay": "⌛ Less than a day left",
   "settingsFreePlanSubtitle": "Free plan — live voice requires Duo Pro",
   "settingsDuoProActiveSubtitle": "You're on Duo Pro",
   "settingsManageSubscription": "Manage Subscription",

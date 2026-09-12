@@ -329,10 +329,15 @@ class NudgeRepository {
         error: 'no_recipients',
         groupId: groupId,
         level: LogLevel.warn,
-        debugMetadata: {'nudge_type': kind, 'send_status': 'failed'},
+        debugMetadata: {
+          'nudge_type': kind,
+          'send_status': 'failed',
+          'unreachable_reason': 'no_active_friends',
+        },
       );
       throw const NudgeDeliveryException(
         'No active friends were found for this nudge.',
+        code: NudgeDeliveryFailureCode.noRecipients,
       );
     }
     if (targetDevices == 0) {
@@ -351,10 +356,16 @@ class NudgeRepository {
         error: 'no_registered_device',
         groupId: groupId,
         level: LogLevel.warn,
-        debugMetadata: {'nudge_type': kind, 'send_status': 'failed'},
+        debugMetadata: {
+          'nudge_type': kind,
+          'send_status': 'failed',
+          'unreachable_reason': 'no_registered_device',
+          'likely_cause': 'wrong_account_or_missing_fcm',
+        },
       );
       throw const NudgeDeliveryException(
-        'The recipient has no registered Android device. Ask them to open Duo once.',
+        UserFacingCopy.recipientDeviceUnavailable,
+        code: NudgeDeliveryFailureCode.noRegisteredDevice,
       );
     }
     if (sent == 0) {
@@ -380,6 +391,8 @@ class NudgeRepository {
           'delivery_status': 'fcm_rejected',
           'recipient_users': recipientUsers,
           'target_devices': targetDevices,
+          'unreachable_reason': 'fcm_rejected',
+          'likely_cause': 'wrong_account_or_stale_fcm',
         },
       );
       unawaited(
@@ -396,16 +409,24 @@ class NudgeRepository {
       );
       throw const NudgeDeliveryException(
         UserFacingCopy.notificationDeliveryFailure,
+        code: NudgeDeliveryFailureCode.fcmNotDelivered,
       );
     }
     return response;
   }
 }
 
+abstract final class NudgeDeliveryFailureCode {
+  static const noRecipients = 'no_recipients';
+  static const noRegisteredDevice = 'no_registered_device';
+  static const fcmNotDelivered = 'fcm_not_delivered';
+}
+
 class NudgeDeliveryException implements Exception {
-  const NudgeDeliveryException(this.message);
+  const NudgeDeliveryException(this.message, {this.code});
 
   final String message;
+  final String? code;
 
   @override
   String toString() => message;

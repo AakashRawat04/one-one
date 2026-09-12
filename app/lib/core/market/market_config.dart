@@ -126,6 +126,22 @@ class MarketSnapshot {
     remoteOnboardingVariant: MarketRemoteConfig.onboardingVariantOrNull(),
   );
 
+  /// India keeps the local onboarding illustrations. Any other resolved
+  /// Play/backend country (including storefronts without a [Market] enum
+  /// value yet) uses the abroad artwork set.
+  bool get usesAbroadOnboardingArt {
+    if (market == Market.india) return false;
+    final iso = isoCountryCode?.trim().toUpperCase();
+    if (iso == 'IN') return false;
+    if (market != Market.unknown) return true;
+    return iso != null && iso.isNotEmpty && iso != 'XX';
+  }
+
+  /// Third permission-setup screen artwork (background / battery step).
+  String get permissionSetupScreen3Asset => usesAbroadOnboardingArt
+      ? 'assets/abroad_onboarding3.png'
+      : 'assets/Onboarding2.png';
+
   static const unknown = MarketSnapshot(
     market: Market.unknown,
     source: MarketSource.unknown,

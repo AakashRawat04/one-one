@@ -139,10 +139,28 @@ class AppLocalizationsFr extends AppLocalizations {
   String get hapticsWildDetail => 'Vibration continue pendant tout le nudge.';
 
   @override
+  String get settingsHomeBackgroundTitle => 'Fond d\'écran d\'accueil';
+
+  @override
+  String get settingsHomeBackgroundSubtitle =>
+      'Choisissez le fond de l\'écran d\'accueil.';
+
+  @override
+  String get settingsHomeBackgroundDefault => 'Par défaut';
+
+  @override
+  String get settingsHomeBackgroundIllustrated => 'Illustré';
+
+  @override
   String get settingsSaveColor => 'Enregistrer la couleur';
 
   @override
   String get settingsSaved => 'Réglages enregistrés';
+
+  @override
+  String settingsAppVersion(String version) {
+    return 'Version $version';
+  }
 
   @override
   String get settingsSectionBackground => 'Fiabilité en arrière-plan';
@@ -208,14 +226,14 @@ class AppLocalizationsFr extends AppLocalizations {
 
   @override
   String settingsTrialDaysLeft(int count) {
-    return '$count jours restants d\'essai gratuit';
+    return '⌛ $count jours restants';
   }
 
   @override
-  String get settingsTrialOneDayLeft => '1 jour restant d\'essai gratuit';
+  String get settingsTrialOneDayLeft => '⌛ 1 jour restant';
 
   @override
-  String get settingsTrialLessThanADay => 'Moins d\'un jour d\'essai gratuit';
+  String get settingsTrialLessThanADay => '⌛ Moins d\'un jour';
 
   @override
   String get settingsFreePlanSubtitle =>

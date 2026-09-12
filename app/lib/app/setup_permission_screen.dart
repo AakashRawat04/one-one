@@ -49,40 +49,47 @@ class _StepVisual {
 /// painted with the illustration's own backdrop so the contained image
 /// blends into the letterbox. Screen 2 (purple) stays contained at full
 /// size with a matching purple letterbox.
-const Map<_SetupStep, _StepVisual> _stepVisuals = {
-  _SetupStep.mic: _StepVisual(
-    iconColor: Color(0xff8fa83e),
-    icon: Icons.mic_rounded,
-    backgroundAsset: 'assets/Onboarding1.png',
-    imageWidth: 848,
-    imageHeight: 1264,
-    // Screen 1 — uniform lime green (rgb 139,161,80).
-    boxTopColor: Color(0xff8BA150),
-    boxBottomColor: Color(0xff8BA150),
-  ),
-  _SetupStep.notification: _StepVisual(
-    iconColor: Color(0xff7a4fc9),
-    icon: Icons.notifications_rounded,
-    backgroundAsset: 'assets/Onboarding3.png',
-    imageWidth: 712,
-    imageHeight: 1264,
-    // Screen 2 — uniform purple (rgb 95,40,121). Full contain, no extra inset.
-    boxTopColor: Color(0xff5F2879),
-    boxBottomColor: Color(0xff5F2879),
-  ),
-  _SetupStep.background: _StepVisual(
-    iconColor: Color(0xffE9A51C),
-    icon: Icons.battery_saver_rounded,
-    backgroundAsset: 'assets/Onboarding2.png',
-    imageWidth: 816,
-    imageHeight: 1287,
-    // Screen 3 — unified illustration yellow (rgb 233,165,28). Scale below 1
-    // so the artwork sits with a matching yellow border around it.
-    boxTopColor: Color(0xffE9A51C),
-    boxBottomColor: Color(0xffE9A51C),
-    containScale: 0.78,
-  ),
-};
+///
+/// Screen 3 swaps to [MarketSnapshot.permissionSetupScreen3Asset] for
+/// Play markets outside India (`abroad_onboarding3.png`).
+Map<_SetupStep, _StepVisual> _stepVisualsFor(MarketSnapshot snapshot) {
+  final screen3Abroad = snapshot.usesAbroadOnboardingArt;
+  return {
+    _SetupStep.mic: const _StepVisual(
+      iconColor: Color(0xff8fa83e),
+      icon: Icons.mic_rounded,
+      backgroundAsset: 'assets/Onboarding1.png',
+      imageWidth: 848,
+      imageHeight: 1264,
+      // Screen 1 — uniform lime green (rgb 139,161,80).
+      boxTopColor: Color(0xff8BA150),
+      boxBottomColor: Color(0xff8BA150),
+    ),
+    _SetupStep.notification: const _StepVisual(
+      iconColor: Color(0xff7a4fc9),
+      icon: Icons.notifications_rounded,
+      backgroundAsset: 'assets/Onboarding3.png',
+      imageWidth: 712,
+      imageHeight: 1264,
+      // Screen 2 — uniform purple (rgb 95,40,121). Full contain, no extra inset.
+      boxTopColor: Color(0xff5F2879),
+      boxBottomColor: Color(0xff5F2879),
+    ),
+    _SetupStep.background: _StepVisual(
+      iconColor: const Color(0xffE9A51C),
+      icon: Icons.battery_saver_rounded,
+      backgroundAsset: snapshot.permissionSetupScreen3Asset,
+      // Abroad art is taller (941×1671); India art is 816×1287.
+      imageWidth: screen3Abroad ? 941 : 816,
+      imageHeight: screen3Abroad ? 1671 : 1287,
+      // Screen 3 — unified illustration yellow. Scale below 1 so the
+      // artwork sits with a matching yellow border around it.
+      boxTopColor: Color(screen3Abroad ? 0xffE8A30E : 0xffE9A51C),
+      boxBottomColor: Color(screen3Abroad ? 0xffE8A30E : 0xffE9A51C),
+      containScale: 0.78,
+    ),
+  };
+}
 
 class SetupPermissionScreen extends StatefulWidget {
   const SetupPermissionScreen({super.key, required this.onComplete});
@@ -326,126 +333,132 @@ class _SetupPermissionScreenState extends State<SetupPermissionScreen>
 
   @override
   Widget build(BuildContext context) {
-    final visual = _stepVisuals[_step]!;
-    final backdrop = _backdropColor(visual);
+    return ValueListenableBuilder<MarketSnapshot>(
+      valueListenable: MarketController.snapshot,
+      builder: (context, snapshot, _) {
+        final visual = _stepVisualsFor(snapshot)[_step]!;
+        final backdrop = _backdropColor(visual);
 
-    return Scaffold(
-      backgroundColor: backdrop,
-      body: Stack(
-        fit: StackFit.expand,
-        children: [
-          Positioned.fill(child: ColoredBox(color: backdrop)),
-          AnimatedSwitcher(
-            duration: _stageTransitionDuration,
-            switchInCurve: Curves.easeOutCubic,
-            switchOutCurve: Curves.easeInCubic,
-            layoutBuilder: (currentChild, previousChildren) {
-              return Stack(
-                fit: StackFit.expand,
-                alignment: Alignment.center,
-                children: [
-                  ...previousChildren,
-                  if (currentChild != null) currentChild,
-                ],
-              );
-            },
-            transitionBuilder: (child, animation) {
-              return FadeTransition(opacity: animation, child: child);
-            },
-            child: _buildStepBackground(visual),
-          ),
-          // Bottom scrim so the CTA card and footnote stay legible over
-          // whatever part of the artwork ends up behind them.
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            height: 320.h,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Colors.black.withValues(alpha: 0),
-                    Colors.black.withValues(alpha: 0.55),
-                    Colors.black.withValues(alpha: 0.88),
-                  ],
-                  stops: const [0, 0.45, 1],
-                ),
+        return Scaffold(
+          backgroundColor: backdrop,
+          body: Stack(
+            fit: StackFit.expand,
+            children: [
+              Positioned.fill(child: ColoredBox(color: backdrop)),
+              AnimatedSwitcher(
+                duration: _stageTransitionDuration,
+                switchInCurve: Curves.easeOutCubic,
+                switchOutCurve: Curves.easeInCubic,
+                layoutBuilder: (currentChild, previousChildren) {
+                  return Stack(
+                    fit: StackFit.expand,
+                    alignment: Alignment.center,
+                    children: [
+                      ...previousChildren,
+                      if (currentChild != null) currentChild,
+                    ],
+                  );
+                },
+                transitionBuilder: (child, animation) {
+                  return FadeTransition(opacity: animation, child: child);
+                },
+                child: _buildStepBackground(visual),
               ),
-            ),
-          ),
-          SafeArea(
-            child: Padding(
-              padding: EdgeInsets.symmetric(horizontal: 24.w),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  AnimatedSwitcher(
-                    duration: _stageTransitionDuration,
-                    switchInCurve: Curves.easeOutCubic,
-                    switchOutCurve: Curves.easeInCubic,
-                    transitionBuilder: (child, animation) {
-                      final offsetAnimation = Tween<Offset>(
-                        begin: const Offset(0.12, 0),
-                        end: Offset.zero,
-                      ).animate(animation);
-                      return FadeTransition(
-                        opacity: animation,
-                        child: SlideTransition(
-                          position: offsetAnimation,
-                          child: child,
-                        ),
-                      );
-                    },
-                    child: switch (_step) {
-                      _SetupStep.mic => _PermissionCard(
-                        key: const ValueKey('mic-card'),
-                        iconColor: visual.iconColor,
-                        icon: visual.icon,
-                        title: context.l10n.permissionMicTitle,
-                        subtitle: context.l10n.permissionMicSubtitle,
-                        checked: _micGranted,
-                        onTap: _requestMicPermission,
-                      ),
-                      _SetupStep.notification => _PermissionCard(
-                        key: const ValueKey('notification-card'),
-                        iconColor: visual.iconColor,
-                        icon: visual.icon,
-                        title: context.l10n.permissionNotificationsTitle,
-                        subtitle: context.l10n.permissionNotificationsSubtitle,
-                        checked: _notificationGranted,
-                        onTap: _requestNotificationPermission,
-                      ),
-                      _SetupStep.background => _PermissionCard(
-                        key: const ValueKey('background-card'),
-                        iconColor: visual.iconColor,
-                        icon: visual.icon,
-                        title: context.l10n.permissionBackgroundTitle,
-                        subtitle: context.l10n.permissionBackgroundSubtitle,
-                        checked: _backgroundGranted,
-                        onTap: _requestBackgroundPermission,
-                      ),
-                    },
-                  ),
-                  SizedBox(height: 16.h),
-                  Text(
-                    context.l10n.permissionFootnote,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: const Color.fromRGBO(255, 255, 255, 0.72),
-                      fontSize: 11.sp,
-                      height: 1.2,
+              // Bottom scrim so the CTA card and footnote stay legible over
+              // whatever part of the artwork ends up behind them.
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                height: 320.h,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        Colors.black.withValues(alpha: 0),
+                        Colors.black.withValues(alpha: 0.55),
+                        Colors.black.withValues(alpha: 0.88),
+                      ],
+                      stops: const [0, 0.45, 1],
                     ),
                   ),
-                  SizedBox(height: 28.h),
-                ],
+                ),
               ),
-            ),
+              SafeArea(
+                child: Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 24.w),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      AnimatedSwitcher(
+                        duration: _stageTransitionDuration,
+                        switchInCurve: Curves.easeOutCubic,
+                        switchOutCurve: Curves.easeInCubic,
+                        transitionBuilder: (child, animation) {
+                          final offsetAnimation = Tween<Offset>(
+                            begin: const Offset(0.12, 0),
+                            end: Offset.zero,
+                          ).animate(animation);
+                          return FadeTransition(
+                            opacity: animation,
+                            child: SlideTransition(
+                              position: offsetAnimation,
+                              child: child,
+                            ),
+                          );
+                        },
+                        child: switch (_step) {
+                          _SetupStep.mic => _PermissionCard(
+                            key: const ValueKey('mic-card'),
+                            iconColor: visual.iconColor,
+                            icon: visual.icon,
+                            title: context.l10n.permissionMicTitle,
+                            subtitle: context.l10n.permissionMicSubtitle,
+                            checked: _micGranted,
+                            onTap: _requestMicPermission,
+                          ),
+                          _SetupStep.notification => _PermissionCard(
+                            key: const ValueKey('notification-card'),
+                            iconColor: visual.iconColor,
+                            icon: visual.icon,
+                            title: context.l10n.permissionNotificationsTitle,
+                            subtitle:
+                                context.l10n.permissionNotificationsSubtitle,
+                            checked: _notificationGranted,
+                            onTap: _requestNotificationPermission,
+                          ),
+                          _SetupStep.background => _PermissionCard(
+                            key: const ValueKey('background-card'),
+                            iconColor: visual.iconColor,
+                            icon: visual.icon,
+                            title: context.l10n.permissionBackgroundTitle,
+                            subtitle: context.l10n.permissionBackgroundSubtitle,
+                            checked: _backgroundGranted,
+                            onTap: _requestBackgroundPermission,
+                          ),
+                        },
+                      ),
+                      SizedBox(height: 16.h),
+                      Text(
+                        context.l10n.permissionFootnote,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: const Color.fromRGBO(255, 255, 255, 0.72),
+                          fontSize: 11.sp,
+                          height: 1.2,
+                        ),
+                      ),
+                      SizedBox(height: 28.h),
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 }

@@ -520,6 +520,9 @@ class IdentityRepository {
   }
 
   Future<void> signOut() async {
+    // Drop this phone from the outgoing account before clearing auth so
+    // friends stop targeting a device that is about to sign into someone else.
+    await _unregisterCurrentDeviceBestEffort();
     try {
       await GoogleSignIn.instance.signOut();
     } finally {
@@ -528,6 +531,31 @@ class IdentityRepository {
       unawaited(AppTelemetry.clearUser());
       unawaited(AnalyticsService.logLogout());
       unawaited(CrashlyticsService.log('user_signed_out'));
+    }
+  }
+
+  Future<void> _unregisterCurrentDeviceBestEffort() async {
+    final user = _auth.currentUser;
+    if (user == null || user.isAnonymous) return;
+    try {
+      final deviceId =
+          _cachedSession?.device.deviceId ??
+          (await _deviceIdentityStore.getOrCreate()).deviceId;
+      await _database.ref('userDevices/${user.uid}/$deviceId').remove();
+      debugPrint(
+        '[OneOneFCM][DART-05] userDevices cleared on sign-out '
+        'userSuffix=${_diagnosticSuffix(user.uid)} '
+        'deviceSuffix=${_diagnosticSuffix(deviceId)}',
+      );
+    } catch (error, stack) {
+      unawaited(
+        CrashlyticsService.recordError(
+          error,
+          stack,
+          reason: 'device_unregister_on_sign_out_failed',
+          feature: 'identity',
+        ),
+      );
     }
   }
 

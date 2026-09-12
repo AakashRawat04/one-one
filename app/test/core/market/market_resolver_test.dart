@@ -102,6 +102,52 @@ void main() {
     });
   });
 
+  group('MarketSnapshot onboarding artwork', () {
+    test('India keeps the local screen-3 illustration', () {
+      const snapshot = MarketSnapshot(
+        market: Market.india,
+        source: MarketSource.playStore,
+        isoCountryCode: 'IN',
+      );
+      expect(snapshot.usesAbroadOnboardingArt, isFalse);
+      expect(snapshot.permissionSetupScreen3Asset, 'assets/Onboarding2.png');
+    });
+
+    test('Play markets outside India use abroad_onboarding3', () {
+      const snapshot = MarketSnapshot(
+        market: Market.usa,
+        source: MarketSource.playStore,
+        isoCountryCode: 'US',
+      );
+      expect(snapshot.usesAbroadOnboardingArt, isTrue);
+      expect(
+        snapshot.permissionSetupScreen3Asset,
+        'assets/abroad_onboarding3.png',
+      );
+    });
+
+    test('unmapped Play storefronts still get abroad artwork', () {
+      const snapshot = MarketSnapshot(
+        market: Market.unknown,
+        source: MarketSource.playStore,
+        isoCountryCode: 'AU',
+      );
+      expect(snapshot.usesAbroadOnboardingArt, isTrue);
+      expect(
+        snapshot.permissionSetupScreen3Asset,
+        'assets/abroad_onboarding3.png',
+      );
+    });
+
+    test('unresolved market keeps the India illustration', () {
+      expect(MarketSnapshot.unknown.usesAbroadOnboardingArt, isFalse);
+      expect(
+        MarketSnapshot.unknown.permissionSetupScreen3Asset,
+        'assets/Onboarding2.png',
+      );
+    });
+  });
+
   group('MarketResolver', () {
     test('prefers backend over Play and device region', () async {
       final resolver = MarketResolver(

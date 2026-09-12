@@ -5,11 +5,17 @@ import android.os.Handler
 import android.os.Looper
 
 /**
- * Short-lived in-widget confirmation after Ring / Notify is tapped, so the
- * status pill updates immediately instead of waiting on the network toast.
+ * Short-lived in-widget confirmation after Ring / Notify / Accept / Decline
+ * so the status pill updates immediately instead of waiting on the network.
  */
 object DuoWidgetActionFeedback {
-    enum class Kind { RINGING, NOTIFIED }
+    enum class Kind {
+        RINGING,
+        NOTIFIED,
+        JOINING,
+        DECLINED,
+        SENT,
+    }
 
     private data class Entry(
         val groupId: String,
@@ -17,7 +23,8 @@ object DuoWidgetActionFeedback {
         val untilMs: Long,
     )
 
-    private const val visibleMs = 2_500L
+    private const val defaultVisibleMs = 2_500L
+    private const val joiningVisibleMs = 8_000L
     private val mainHandler = Handler(Looper.getMainLooper())
     private val lock = Any()
     private var entry: Entry? = null
@@ -26,6 +33,7 @@ object DuoWidgetActionFeedback {
     fun show(context: Context, groupId: String, kind: Kind) {
         if (groupId.isBlank()) return
         val appContext = context.applicationContext
+        val visibleMs = if (kind == Kind.JOINING) joiningVisibleMs else defaultVisibleMs
         val until = System.currentTimeMillis() + visibleMs
         synchronized(lock) {
             clearRunnable?.let { mainHandler.removeCallbacks(it) }

@@ -267,8 +267,11 @@ object DuoWidgetRenderer {
         // Live when this device is in-session OR the snapshot says a friend is.
         // Clearing either source must drop the LIVE chrome immediately.
         val isOnline = selfLive || friendsLive
+        val feedback = DuoWidgetActionFeedback.currentFor(group.groupId)
         val state = when {
             isOnline -> DuoWidgetState.ONLINE
+            feedback == DuoWidgetActionFeedback.Kind.JOINING ||
+                feedback == DuoWidgetActionFeedback.Kind.DECLINED -> DuoWidgetState.IDLE
             pending != null -> DuoWidgetState.PENDING
             else -> DuoWidgetState.IDLE
         }
@@ -281,7 +284,6 @@ object DuoWidgetRenderer {
                     "selfLive=$selfLive friendsLive=$friendsLive",
             )
         }
-        val feedback = DuoWidgetActionFeedback.currentFor(group.groupId)
         renderState(views, state, pending, feedback)
         setActionIntents(
             context,
@@ -415,14 +417,12 @@ object DuoWidgetRenderer {
 
     /**
      * Scale to a binder-safe size, clip to a circle, and flatten onto an
-     * opaque card-colored plate. Several OEM hosts (Motorola among them)
-     * drop RemoteViews bitmaps that have an alpha channel — [toCircular]
-     * produces transparent corners — so every pixel must stay opaque.
-     * Drawing onto #151515 matches [R.color.widget_glass_card_fill].
+     * opaque card-colored plate. Several OEM hosts drop RemoteViews bitmaps
+     * that have an alpha channel, so every pixel must stay opaque — the
+     * plate matches [R.color.widget_glass_card_fill] so square corners
+     * disappear into the widget card and the photo reads as a circle.
      *
-     * The circular clip keeps adjacent avatars from reading as stacked
-     * squares when the row is laid out tightly. The result is a new bitmap
-     * so the launcher recycling the parcel cannot poison
+     * The copy is a new bitmap so the launcher cannot poison
      * [NotificationAvatarHelper]'s cache.
      */
     private fun copyWidgetBitmap(source: Bitmap): Bitmap? {
@@ -434,18 +434,27 @@ object DuoWidgetRenderer {
             out.eraseColor(0xFF151515.toInt())
             val canvas = Canvas(out)
             val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { isFilterBitmap = true }
-            val bounds = RectF(0f, 0f, avatarPx.toFloat(), avatarPx.toFloat())
+            val srcW = source.width.toFloat().coerceAtLeast(1f)
+            val srcH = source.height.toFloat().coerceAtLeast(1f)
+            val scale = maxOf(avatarPx / srcW, avatarPx / srcH)
+            val dw = srcW * scale
+            val dh = srcH * scale
+            val dst = RectF(
+                (avatarPx - dw) / 2f,
+                (avatarPx - dh) / 2f,
+                (avatarPx + dw) / 2f,
+                (avatarPx + dh) / 2f,
+            )
             val clip = Path().apply {
                 addCircle(avatarPx / 2f, avatarPx / 2f, avatarPx / 2f, Path.Direction.CW)
             }
             canvas.save()
             canvas.clipPath(clip)
-            canvas.drawBitmap(source, null, bounds, paint)
+            canvas.drawBitmap(source, null, dst, paint)
             canvas.restore()
-            // Hairline ring so neighbouring circles stay distinct.
             val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 style = Paint.Style.STROKE
-                strokeWidth = avatarPx * 0.06f
+                strokeWidth = avatarPx * 0.05f
                 color = 0xFF151515.toInt()
             }
             canvas.drawCircle(
@@ -607,6 +616,18 @@ object DuoWidgetRenderer {
                         trySetText(views, R.id.status_pill, "Notified")
                         trySetVisibility(views, R.id.status_pill, View.VISIBLE)
                     }
+                    DuoWidgetActionFeedback.Kind.JOINING -> {
+                        trySetText(views, R.id.status_pill, "Joining…")
+                        trySetVisibility(views, R.id.status_pill, View.VISIBLE)
+                    }
+                    DuoWidgetActionFeedback.Kind.DECLINED -> {
+                        trySetText(views, R.id.status_pill, "Declined")
+                        trySetVisibility(views, R.id.status_pill, View.VISIBLE)
+                    }
+                    DuoWidgetActionFeedback.Kind.SENT -> {
+                        trySetText(views, R.id.status_pill, "Voice sent")
+                        trySetVisibility(views, R.id.status_pill, View.VISIBLE)
+                    }
                     null -> trySetVisibility(views, R.id.status_pill, View.GONE)
                 }
                 trySetVisibility(views, R.id.live_label, View.GONE)
@@ -669,8 +690,11 @@ object DuoWidgetRenderer {
             )
             trySetClick(views, R.id.btn_mic, micPendingIntent)
         }
-        // Do NOT also click-bind widget_root when children have actions —
-        // some OEM hosts mishandle nested PendingIntents.
+        val openApp = openAppIntent(context, appWidgetId)
+        trySetClick(views, R.id.widget_root, openApp)
+        trySetClick(views, R.id.group_name, openApp)
+        trySetClick(views, R.id.body_column, openApp)
+        trySetClick(views, R.id.status_pill, openApp)
     }
 
     private fun broadcastIntent(
@@ -700,13 +724,13 @@ object DuoWidgetRenderer {
         )
     }
 
-    private fun openAppIntent(context: Context): PendingIntent {
+    private fun openAppIntent(context: Context, appWidgetId: Int = 0): PendingIntent {
         val intent = Intent(context, MainActivity::class.java).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         }
         return PendingIntent.getActivity(
             context,
-            0,
+            appWidgetId * 10 + 9,
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )

@@ -439,6 +439,24 @@ object IncomingNudgeStore {
         return null
     }
 
+    /**
+     * Drops a still-pending event so the widget leaves accept/decline chrome
+     * after an in-app accept or decline. Already-terminal statuses are kept.
+     */
+    fun dismissPending(context: Context, eventId: String) {
+        if (eventId.isBlank()) return
+        val records = readAll(context)
+        val record = records.optJSONObject(eventId) ?: return
+        if (record.optString("status", "pending") != "pending") return
+        markStatus(context, eventId, "dismissed")
+    }
+
+    fun groupIdForEvent(context: Context, eventId: String): String? {
+        if (eventId.isBlank()) return null
+        val record = readAll(context).optJSONObject(eventId) ?: return null
+        return record.optString("groupId", "").takeIf { it.isNotBlank() }
+    }
+
     fun markStatus(
         context: Context,
         eventId: String,
@@ -499,7 +517,7 @@ object IncomingNudgeStore {
         context.getSharedPreferences(preferencesName, Context.MODE_PRIVATE)
             .edit()
             .putString(payloadKey, records.toString())
-            .apply()
+            .commit()
     }
 
     private fun prune(records: org.json.JSONObject): org.json.JSONObject {
@@ -634,6 +652,17 @@ class NudgeNotificationActionReceiver : BroadcastReceiver() {
         }
         if (responseAction == "decline" && ringBatch != null) {
             RingNudgeBatchStore.clearBatch(appContext, ringBatch.groupId)
+        }
+        if (statusLabel == "declined") {
+            val groupId = ringBatch?.groupId
+                ?: IncomingNudgeStore.groupIdForEvent(appContext, eventId)
+            if (!groupId.isNullOrBlank()) {
+                DuoWidgetActionFeedback.show(
+                    appContext,
+                    groupId,
+                    DuoWidgetActionFeedback.Kind.DECLINED,
+                )
+            }
         }
         val user = FirebaseAuth.getInstance().currentUser
         if (user == null) {

@@ -37,7 +37,7 @@ dependencies:
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
   firebase_core: ^4.9.0
-  firebase_auth: ^6.0.0
+  firebase_auth: ^6.6.0
   firebase_database: ^12.0.0
   google_fonts: ^6.3.0
   flutter_screenutil: ^5.9.3
@@ -103,6 +103,7 @@ flutter:
     - assets/avatars/
     - assets/avatars2/
     - assets/home_bg_images/
+    - assets/duo_stickers/
     - google_fonts/
   #   - images/a_dot_ham.jpeg
 

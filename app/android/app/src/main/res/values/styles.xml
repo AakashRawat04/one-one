@@ -36,9 +36,8 @@
         <item name="android:windowDrawsSystemBarBackgrounds">true</item>
     </style>
 
-    <!-- Translucent, Assistant-style overlay for QuickRecordActivity. Dims
-         whatever is behind it (home screen / other app) while the mic
-         sheet floats above, matching the "Hey Google" mic overlay feel. -->
+    <!-- Translucent overlay for QuickRecordActivity. Dims the home screen
+         while a compact recording card floats above. -->
     <style name="Theme.Duo.QuickRecord" parent="android:Theme.Black.NoTitleBar">
         <item name="android:windowIsTranslucent">true</item>
         <item name="android:windowBackground">@android:color/transparent</item>
@@ -46,6 +45,7 @@
         <item name="android:windowContentOverlay">@null</item>
         <item name="android:windowIsFloating">false</item>
         <item name="android:backgroundDimEnabled">true</item>
+        <item name="android:backgroundDimAmount">0.58</item>
         <item name="android:windowAnimationStyle">@android:style/Animation.Dialog</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>

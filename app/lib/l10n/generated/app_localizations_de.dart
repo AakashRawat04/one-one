@@ -137,10 +137,28 @@ class AppLocalizationsDe extends AppLocalizations {
       'Durchgehende Vibration während des gesamten Nudges.';
 
   @override
+  String get settingsHomeBackgroundTitle => 'Startbildschirm-Hintergrund';
+
+  @override
+  String get settingsHomeBackgroundSubtitle =>
+      'Wähle den Hintergrund auf dem Startbildschirm.';
+
+  @override
+  String get settingsHomeBackgroundDefault => 'Standard';
+
+  @override
+  String get settingsHomeBackgroundIllustrated => 'Illustriert';
+
+  @override
   String get settingsSaveColor => 'Farbe speichern';
 
   @override
   String get settingsSaved => 'Einstellungen gespeichert';
+
+  @override
+  String settingsAppVersion(String version) {
+    return 'Version $version';
+  }
 
   @override
   String get settingsSectionBackground => 'Hintergrundzuverlässigkeit';
@@ -205,15 +223,14 @@ class AppLocalizationsDe extends AppLocalizations {
 
   @override
   String settingsTrialDaysLeft(int count) {
-    return 'Noch $count Tage in der Testphase';
+    return '⌛ Noch $count Tage';
   }
 
   @override
-  String get settingsTrialOneDayLeft => 'Noch 1 Tag in der Testphase';
+  String get settingsTrialOneDayLeft => '⌛ Noch 1 Tag';
 
   @override
-  String get settingsTrialLessThanADay =>
-      'Weniger als ein Tag in der Testphase';
+  String get settingsTrialLessThanADay => '⌛ Weniger als ein Tag';
 
   @override
   String get settingsFreePlanSubtitle =>

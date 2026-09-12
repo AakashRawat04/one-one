@@ -1,6 +1,6 @@
 part of '../../identity_home_screen.dart';
 
-// 1. Blurred member collage (default) or doodle wallpaper (test variants).
+// 1. Blurred member collage (default) or illustrated doodle wallpaper.
 // 2. Tile grid for group photos.
 
 class _HomeBackdrop extends StatelessWidget {

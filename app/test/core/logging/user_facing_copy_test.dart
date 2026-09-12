@@ -11,6 +11,44 @@ void main() {
       );
     });
 
+    test('exposes account-mismatch friendly device copy', () {
+      expect(
+        UserFacingCopy.recipientDeviceUnavailable.contains('this Duo account'),
+        isTrue,
+      );
+      expect(
+        UserFacingCopy.notificationDeliveryFailure.contains('this account'),
+        isTrue,
+      );
+      expect(
+        UserFacingCopy.notificationDeliveryFailure.toLowerCase().contains(
+          'connection',
+        ),
+        isFalse,
+      );
+    });
+
+    test('names the unreachable recipient in sender copy', () {
+      expect(
+        UserFacingCopy.recipientDeviceUnavailableFor(['Alex Kumar']),
+        'Alex isn\u2019t reachable on this Duo account. '
+        'Ask them to open Duo signed into the account in this group.',
+      );
+      expect(
+        UserFacingCopy.recipientDeviceUnavailableFor([
+          'Alex Kumar',
+          'Sam Lee',
+        ]),
+        'Alex and Sam aren\u2019t reachable on this Duo account. '
+        'Ask them to open Duo signed into the account in this group.',
+      );
+      expect(
+        UserFacingCopy.notificationDeliveryFailureFor(['Alex Kumar']),
+        'Couldn\u2019t reach Alex\u2019s device. '
+        'Ask them to open Duo with this account.',
+      );
+    });
+
     test('strips FCM-BE-W1 from sender delivery errors', () {
       expect(
         UserFacingCopy.containsInternalIdentifier(

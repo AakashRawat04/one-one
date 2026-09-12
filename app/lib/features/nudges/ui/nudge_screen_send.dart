@@ -274,7 +274,9 @@ mixin _NudgeSheetSend on _NudgeSheetStateBase, _NudgeSheetDelivery {
       if (!mounted) return;
       final rateLimited =
           error is ApiException && error.code == 'nudge_rate_limited';
-      final message = rateLimited ? error.message : _friendlyError(error);
+      final message = rateLimited
+          ? error.message
+          : _friendlyError(error, recipients: expected);
       if (!cancelled && !rateLimited) {
         NudgeFailureMemory.instance.record(
           widget.group.groupId,
@@ -734,7 +736,10 @@ mixin _NudgeSheetSend on _NudgeSheetStateBase, _NudgeSheetDelivery {
     } catch (error) {
       if (mounted) {
         setState(() {
-          _message = _friendlyError(error);
+          _message = _friendlyError(
+            error,
+            recipients: _recipientsForTarget(),
+          );
           _messageIsError = true;
           _messageIsWarning = false;
         });
@@ -773,16 +778,64 @@ mixin _NudgeSheetSend on _NudgeSheetStateBase, _NudgeSheetDelivery {
     }
   }
 
-  String _friendlyError(Object error) {
+  String _friendlyError(
+    Object error, {
+    List<_PendingRecipient> recipients = const [],
+  }) {
+    final names = recipients.map((r) => r.displayName).toList(growable: false);
     if (error is ApiException && error.code == 'nudge_rate_limited') {
       return error.message;
     }
+    if (error is ApiException && error.code == 'no_recipient_devices') {
+      _logRecipientUnreachable(
+        reason: NudgeDeliveryFailureCode.noRegisteredDevice,
+        recipients: recipients,
+        detail: error.message,
+      );
+      return UserFacingCopy.recipientDeviceUnavailableFor(names);
+    }
     if (error is NudgeDeliveryException) {
+      switch (error.code) {
+        case NudgeDeliveryFailureCode.noRegisteredDevice:
+          _logRecipientUnreachable(
+            reason: NudgeDeliveryFailureCode.noRegisteredDevice,
+            recipients: recipients,
+            detail: error.message,
+          );
+          return UserFacingCopy.recipientDeviceUnavailableFor(names);
+        case NudgeDeliveryFailureCode.fcmNotDelivered:
+          _logRecipientUnreachable(
+            reason: NudgeDeliveryFailureCode.fcmNotDelivered,
+            recipients: recipients,
+            detail: error.message,
+          );
+          return UserFacingCopy.notificationDeliveryFailureFor(names);
+        case NudgeDeliveryFailureCode.noRecipients:
+          _logRecipientUnreachable(
+            reason: NudgeDeliveryFailureCode.noRecipients,
+            recipients: recipients,
+            detail: error.message,
+          );
+          break;
+      }
       return UserFacingCopy.sanitize(error.message);
     }
     final text = error.toString();
+    if (text.contains('no_recipient_devices')) {
+      _logRecipientUnreachable(
+        reason: NudgeDeliveryFailureCode.noRegisteredDevice,
+        recipients: recipients,
+        detail: text,
+      );
+      return UserFacingCopy.recipientDeviceUnavailableFor(names);
+    }
     if (UserFacingCopy.containsInternalIdentifier(text)) {
-      return UserFacingCopy.notificationDeliveryFailure;
+      _logRecipientUnreachable(
+        reason: NudgeDeliveryFailureCode.fcmNotDelivered,
+        recipients: recipients,
+        detail: text,
+      );
+      return UserFacingCopy.notificationDeliveryFailureFor(names);
     }
     if (text.contains('nudge_rate_limited')) {
       return 'Nudge limit reached. Please wait before trying again.';
@@ -791,5 +844,26 @@ mixin _NudgeSheetSend on _NudgeSheetStateBase, _NudgeSheetDelivery {
       return 'Recording was too large. Try again.';
     }
     return 'Couldn\u2019t send the nudge. Check your connection.';
+  }
+
+  void _logRecipientUnreachable({
+    required String reason,
+    required List<_PendingRecipient> recipients,
+    String? detail,
+  }) {
+    final named = recipients.isEmpty
+        ? '-'
+        : recipients
+              .map((r) => '${r.displayName}:${r.userId}')
+              .join(', ');
+    LogManager.log(
+      LogLevel.warn,
+      'NudgeService',
+      'NUDGE_RECIPIENT_UNREACHABLE reason=$reason '
+          'likely_cause=wrong_account_or_missing_fcm '
+          'recipients=[$named] '
+          'detail=${detail ?? '-'}',
+      groupId: widget.group.groupId,
+    );
   }
 }

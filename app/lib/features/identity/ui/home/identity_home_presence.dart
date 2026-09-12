@@ -285,6 +285,7 @@ mixin _IdentityHomePresence on _IdentityHomeBase {
       () {
         if (!mounted) return;
         setState(() {});
+        _syncDuoWidget();
         if (_onlineSession != null) {
           _evaluatePeerPresenceForAutoOffline(_availability);
         }
@@ -378,7 +379,6 @@ mixin _IdentityHomePresence on _IdentityHomeBase {
     }
   }
 
-  @override
   Future<void> _refreshLiveVoiceAccess() async {
     final snapshot = await FreeTrialAccess.snapshot(userId: _session.userId);
     if (!mounted) return;
@@ -386,15 +386,34 @@ mixin _IdentityHomePresence on _IdentityHomeBase {
     setState(() => _hasLiveVoiceAccess = snapshot.canUseLiveVoice);
   }
 
-  /// One-time illustrated paywall when the user returns after trial expiry.
+  /// Keeps Home's locked status line in sync. Does **not** auto-open the
+  /// full paywall — that only appears when the user tries live voice
+  /// (nudge Accept / join).
   @override
-  Future<void> _maybeShowPostTrialPaywall() async {
-    if (!mounted || _voicePaywallOpen || _isOnline) return;
-    if (!await FreeTrialAccess.shouldShowPostTrialPaywall(_session.userId)) {
-      return;
-    }
+  Future<void> _syncLiveVoiceAccess() async {
+    await _refreshLiveVoiceAccess();
     if (!mounted) return;
-    await _presentVoicePaywall();
+    try {
+      final remaining = await FreeTrialAccess.remaining(_session.userId);
+      _scheduleTrialExpiryHomeLock(remaining);
+    } catch (_) {
+      // Access refresh already ran; expiry timer is best-effort.
+    }
+  }
+
+  void _scheduleTrialExpiryHomeLock(Duration remaining) {
+    _trialExpiryTimer?.cancel();
+    _trialExpiryTimer = null;
+    if (remaining <= Duration.zero) return;
+    // When the trial hits zero while Home is open, flip the status hint
+    // without pushing a paywall.
+    _trialExpiryTimer = Timer(
+      remaining + const Duration(milliseconds: 400),
+      () {
+        if (!mounted) return;
+        unawaited(_syncLiveVoiceAccess());
+      },
+    );
   }
 
   /// True when at least one other group member is actively online.
@@ -706,10 +725,7 @@ mixin _IdentityHomePresence on _IdentityHomeBase {
   Future<void> _startTalking() async {
     if (_isCallMode) return;
     unawaited(
-      AnalyticsService.logButtonClick(
-        buttonName: 'talk',
-        screenName: 'home',
-      ),
+      AnalyticsService.logButtonClick(buttonName: 'talk', screenName: 'home'),
     );
     await _toggleConnectionMode();
   }

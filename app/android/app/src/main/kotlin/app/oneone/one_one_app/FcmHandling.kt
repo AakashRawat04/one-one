@@ -5,7 +5,7 @@ import java.time.Instant
 const val FCM_HANDLING_FAILURE_REASON = "fcm_notification_handling_failure"
 
 const val FCM_USER_DELIVERY_FAILURE =
-    "Couldn't deliver notification. Please check your connection."
+    "Couldn't deliver notification."
 
 private val checkpointCode = Regex(
     """\[OneOneFCM\]""" +
