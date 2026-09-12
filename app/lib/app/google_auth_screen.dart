@@ -47,10 +47,9 @@ class _GoogleAuthScreenState extends State<GoogleAuthScreen> {
         screenName: 'google_auth',
       ),
     );
-    // IMMEDIATELY replace the welcome UI with the splash-colored underlay
-    // so the user sees an instant transition rather than waiting on a
-    // button spinner. The Firebase auth stream will swap this screen out
-    // for StartupGateScreen once sign-in completes.
+    // Keep the welcome UI with a busy button. Swapping to the brand-yellow
+    // underlay made a visible yellow flash after the native account picker
+    // closed, before StartupGateScreen reached permission setup.
     setState(() {
       _isSigningIn = true;
       _errorMessage = null;
@@ -59,8 +58,8 @@ class _GoogleAuthScreenState extends State<GoogleAuthScreen> {
     try {
       await _repo.signInWithGoogle();
       // On success the root Firebase auth stream advances to onboarding.
-      // Don't touch _isSigningIn – leave this screen in its underlay state
-      // until the StreamBuilder replaces it.
+      // Leave _isSigningIn true so the button stays busy until this widget
+      // is replaced by StartupGateScreen.
     } catch (error, stack) {
       final message = error.toString();
       final cancelled =
@@ -90,10 +89,9 @@ class _GoogleAuthScreenState extends State<GoogleAuthScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Firebase still booting, or Google sign-in just started: underlay only.
-    // Matches StartupGateScreen so cold starts never flash the welcome CTA at
-    // already-signed-in users.
-    if (widget.initializing || _isSigningIn) {
+    // Firebase still booting: underlay only. Matches StartupGateScreen so
+    // cold starts never flash the welcome CTA at already-signed-in users.
+    if (widget.initializing) {
       return const BrandSplashScreen();
     }
 
@@ -161,7 +159,7 @@ class _GoogleAuthScreenState extends State<GoogleAuthScreen> {
                   SizedBox(height: 14.h),
                 ],
                 _GoogleSignInButton(
-                  busy: false,
+                  busy: _isSigningIn,
                   busyLabel: context.l10n.signingIn,
                   label: context.l10n.continueWithGoogle,
                   onTap: _continueWithGoogle,

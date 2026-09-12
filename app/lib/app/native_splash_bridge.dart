@@ -15,6 +15,11 @@ class NativeSplashBridge {
   static const MethodChannel _channel = MethodChannel('app/splash');
   static bool _sent = false;
 
+  /// Whether [markReady] has already run. After the welcome CTA has shown,
+  /// subsequent loading gates must not paint the brand-yellow underlay —
+  /// that flash is visible (e.g. Google account picker → permission setup).
+  static bool get isReady => _sent;
+
   /// Tells the native side the first real, interactive screen (sign-in CTA,
   /// home, onboarding, or an error screen) is on screen and it's safe to
   /// dismiss the native splash.

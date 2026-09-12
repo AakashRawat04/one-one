@@ -52,8 +52,9 @@ class ElevenProPaywallScreen extends StatefulWidget {
           return FadeTransition(
             opacity: curved,
             child: SlideTransition(
+              // Exit left with the back arrow — not a downward dip.
               position: Tween<Offset>(
-                begin: const Offset(0, 0.08),
+                begin: const Offset(-0.22, 0),
                 end: Offset.zero,
               ).animate(curved),
               child: child,

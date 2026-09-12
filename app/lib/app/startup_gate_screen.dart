@@ -81,10 +81,13 @@ class _StartupGateScreenState extends State<StartupGateScreen>
       final groupsPrefetch = _groupRepository.loadGroupsForUser(session.userId);
 
       // Start the free-trial clock as soon as identity is ready so the
-      // 7-day window covers onboarding as well as home use.
-      await FreeTrialAccess.ensureStarted(session.userId);
+      // 7-day window covers onboarding as well as home use. Do not await
+      // for new users — that only delayed the permission screen and made
+      // the post-Google-sign-in underlay linger.
+      final trialStart = FreeTrialAccess.ensureStarted(session.userId);
 
       if (isReturningUser) {
+        await trialStart;
         // On every launch, verify critical permissions are still granted.
         // Users can revoke them between sessions via system settings.
         if (!await _requiredPermissionsGranted()) {
@@ -105,6 +108,7 @@ class _StartupGateScreenState extends State<StartupGateScreen>
         return;
       }
 
+      unawaited(trialStart);
       setState(() {
         _nextScreen = SetupPermissionScreen(
           onComplete: () async {
@@ -396,9 +400,25 @@ class _StartupGateScreenState extends State<StartupGateScreen>
       );
     }
 
-    // Covered by the native splash. No Flutter logo — that was the
-    // duplicate large-logo screen on devices that dismiss the native
-    // splash at first frame.
+    // Cold start: native splash still covers this, so brand yellow is fine.
+    // Post Google sign-in: splash is already gone — paint the mic-step
+    // backdrop (and artwork) so the handoff into SetupPermissionScreen
+    // does not flash brand yellow.
+    if (NativeSplashBridge.isReady) {
+      return Scaffold(
+        backgroundColor: SetupPermissionScreen.firstStepBackgroundColor,
+        body: ColoredBox(
+          color: SetupPermissionScreen.firstStepBackgroundColor,
+          child: Center(
+            child: Image.asset(
+              'assets/Onboarding1.png',
+              fit: BoxFit.contain,
+              gaplessPlayback: true,
+            ),
+          ),
+        ),
+      );
+    }
     return const BrandSplashScreen();
   }
 }

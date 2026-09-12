@@ -94,6 +94,11 @@ Map<_SetupStep, _StepVisual> _stepVisualsFor(MarketSnapshot snapshot) {
 class SetupPermissionScreen extends StatefulWidget {
   const SetupPermissionScreen({super.key, required this.onComplete});
 
+  /// Letterbox / scaffold color for the mic step (`Onboarding1.png`).
+  /// Used by [StartupGateScreen] as a post-auth loading underlay so the
+  /// handoff from Google sign-in does not flash brand yellow.
+  static const firstStepBackgroundColor = Color(0xff8BA150);
+
   final Future<void> Function() onComplete;
 
   @override

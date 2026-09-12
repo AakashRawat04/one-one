@@ -38,15 +38,15 @@ mixin _NudgeSheetSend on _NudgeSheetStateBase, _NudgeSheetDelivery {
   Future<void> _sendPush() async {
     if (_cooldownRemaining(NudgeKind.push) > Duration.zero) return;
     _lastSentNudgeKind = NudgeKind.push;
-    _showConfirmingText = true;
+    // Push/notify: no delivery wait or pending buffer — once the API accepts,
+    // surface "Sent" immediately (ring/voice still confirm playback).
     await _send(
       () => _repository.sendPush(
         groupId: widget.group.groupId,
         target: _effectiveTarget(),
       ),
       kind: NudgeKind.push,
-      awaitsDeliveryConfirmation: true,
-      waitingMessage: 'Delivering ring nudge\u2026',
+      silentSuccess: true,
     );
   }
 
@@ -226,7 +226,7 @@ mixin _NudgeSheetSend on _NudgeSheetStateBase, _NudgeSheetDelivery {
           signifiers: signifiers,
         );
         setState(() {
-          _message = null;
+          _message = 'Sent';
           _messageIsError = false;
           _messageIsWarning = false;
           _messagePending = false;
